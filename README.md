@@ -1,6 +1,6 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-orange.svg?style=for-the-badge)](https://github.com/hacs/integration)
 
-#meross_rpc
+# meross_rpc
 - Home Assistant version: 2025.2.5 or above.
 - Integrate Meross devices that support `RPC` protocol into Home Assistant.
 
