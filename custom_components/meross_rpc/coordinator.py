@@ -117,7 +117,7 @@ class RefossCoordinatorBase(DataUpdateCoordinator[None]):
             config_entry_id=self.entry.entry_id,
             name=self.device.name,
             connections={(CONNECTION_NETWORK_MAC, self.mac)},
-            manufacturer="Refoss",
+            manufacturer="Meross",
             model=self.model,
             sw_version=self.sw_version,
             hw_version=self.hw_version,
@@ -147,13 +147,13 @@ class RefossCoordinatorBase(DataUpdateCoordinator[None]):
 
     async def _async_device_connect_task(self) -> bool:
         """Connect to a Refoss device task."""
-        LOGGER.debug("Connecting to Refoss Device - %s", self.name)
+        LOGGER.debug("Connecting to Meross Device - %s", self.name)
         try:
             await self.device.initialize()
             update_device_fw_info(self.hass, self.device, self.entry)
         except (DeviceConnectionError, MacAddressMismatchError) as err:
             LOGGER.debug(
-                "Error connecting to Refoss device %s, error: %r", self.name, err
+                "Error connecting to Meross device %s, error: %r", self.name, err
             )
             return False
         except InvalidAuthError:
@@ -272,7 +272,7 @@ class RefossCoordinator(RefossCoordinatorBase):
                     raise UpdateFailed("Device reconnect error")
                 return
         try:
-            LOGGER.debug("Polling Refoss  Device - %s", self.name)
+            LOGGER.debug("Polling Meross  Device - %s", self.name)
             await self.device.poll()
         except DeviceConnectionError as err:
             raise UpdateFailed(f"Device disconnected: {err!r}") from err
@@ -320,7 +320,7 @@ class RefossCoordinator(RefossCoordinatorBase):
         self, device: RpcDevice, update_type: RpcUpdateType
     ) -> None:
         """Handle device update."""
-        LOGGER.debug("Refoss %s handle update, type: %s", self.name, update_type)
+        LOGGER.debug("Meross %s handle update, type: %s", self.name, update_type)
         if update_type is RpcUpdateType.ONLINE:
             self._came_online_once = True
             self._async_handle_refoss_device_online()
