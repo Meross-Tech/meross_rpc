@@ -42,7 +42,7 @@ def async_describe_events(
                 input_name = get_refoss_entity_name(coordinator.device, key)
 
         return {
-            LOGBOOK_ENTRY_NAME: "Refoss",
+            LOGBOOK_ENTRY_NAME: "Meross",
             LOGBOOK_ENTRY_MESSAGE: (
                 f"'{click_type}' click event for {input_name} Input was fired"
             ),

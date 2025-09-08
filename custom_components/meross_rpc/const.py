@@ -5,7 +5,7 @@ from __future__ import annotations
 from logging import Logger, getLogger
 from typing import Final
 
-DOMAIN: Final = "refoss_rpc"
+DOMAIN: Final = "meross_rpc"
 
 LOGGER: Logger = getLogger(__package__)
 
@@ -14,7 +14,7 @@ REFOSS_CHECK_INTERVAL = 60
 
 
 # Button Click events for devices
-EVENT_REFOSS_CLICK: Final = "refoss.click"
+EVENT_REFOSS_CLICK: Final = "meross.click"
 
 ATTR_CLICK_TYPE: Final = "click_type"
 ATTR_CHANNEL: Final = "channel"
