@@ -12,8 +12,9 @@ On the other hand, if you don't have HACS installed or if you don't plan to inst
 
 ### Option A: Installing via HACS
 If you have HACS, well, it's piece of cake!
-Just search for "Meross" (Full name is Meross RPC) in the default repository of HACS and it'll show up.
-Click on Install. When the installation completes, **you must restart homeassistant** in order to make it work.
+Add this repository as a custom repository in HACS.
+Reference [here](https://www.hacs.xyz/docs/faq/custom_repositories/).
+When the installation completes, **you must restart homeassistant** in order to make it work.
 As soon as HomeAssistant is restarted, you can proceed with __component setup__.
 
 ### Option B: Classic installation (custom_component)
