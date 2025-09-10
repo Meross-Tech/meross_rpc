@@ -188,11 +188,12 @@ class RefossAttributeEntity(RefossEntity, Entity):
         try:
             if self.key.startswith("emmerge:"):
                 # Call the merge channel attributes function
-                return merge_channel_get_status(
+                val = merge_channel_get_status(
                     self.coordinator.device.status,
                     self.key,
                     self.entity_description.sub_key,
                 )
+                return self.entity_description.value(val, None)
 
             if self.sub_status is None:
                 return None
