@@ -193,7 +193,10 @@ class RefossAttributeEntity(RefossEntity, Entity):
                     self.key,
                     self.entity_description.sub_key,
                 )
-                return self.entity_description.value(val, None)
+                if self.entity_description.value is not None:
+                    return self.entity_description.value(val, self._last_value)
+
+                return val
 
             if self.sub_status is None:
                 return None
