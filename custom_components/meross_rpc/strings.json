@@ -3,6 +3,15 @@
     "flow_title": "{name}",
     "step": {
       "user": {
+        "title": "Meross",
+        "description": "Choose Wi-Fi or Bluetooth to set up your Meross device.",
+        "menu_options": {
+          "wifi": "Meross WiFi devices",
+          "bluetooth_setup": "Meross Bluetooth devices"
+        }
+      },
+      "wifi": {
+        "title": "Meross Wi-Fi",
         "description": "Before setup, devices must be connected to the network.\n\nThis path can be configured for Meross product models including em06p,em16p, etc. \n\nFor more information, please refer to 'Help'.",
         "data": {
           "host": "[%key:common::config_flow::data::host%]"
@@ -36,7 +45,25 @@
           "host": "[%key:common::config_flow::data::host%]"
         },
         "data_description": {
-          "host": "[%key:component::meross_rpc::config::step::user::data_description::host%]"
+          "host": "[%key:component::meross_rpc::config::step::wifi::data_description::host%]"
+        }
+      },
+      "bluetooth_setup": {
+        "title": "Meross Bluetooth",
+        "description": "Choose a discovered Meross BLE device.",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "Meross Bluetooth",
+        "description": "Do you want to set up {name}?"
+      },
+      "init": {
+        "title": "Meross Bluetooth options",
+        "description": "Options for {model}",
+        "data": {
+          "retry_count": "Connection retry count"
         }
       }
     },
@@ -46,13 +73,27 @@
       "reauth_unsuccessful": "Re-authentication was unsuccessful, please remove the integration and set it up again.",
       "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]",
       "another_device": "Re-configuration was unsuccessful, the IP address/hostname of another Meross device was used.",
-      "mac_address_mismatch": "[%key:component::meross_rpc::config::error::mac_address_mismatch%]"
+      "mac_address_mismatch": "[%key:component::meross_rpc::config::error::mac_address_mismatch%]",
+      "no_bluetooth_adapter": "No Bluetooth adapter or proxy is configured in Home Assistant",
+      "no_devices_found": "No Meross Bluetooth devices found nearby",
+      "not_supported": "Device not supported"
     },
     "error": {
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
       "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
       "firmware_not_fully_supported": "Device not fully supported. Please contact Meross support",
       "mac_address_mismatch": "The MAC address of the device does not match the one in the configuration, please reboot the device and try again."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Meross Bluetooth options",
+        "description": "Options for {model}",
+        "data": {
+          "retry_count": "Connection retry count"
+        }
+      }
     }
   },
   "device_automation": {
@@ -70,6 +111,40 @@
     }
   },
   "entity": {
+    "sensor": {
+      "bluetooth_signal": {
+        "name": "Bluetooth signal"
+      },
+      "dew_point": {
+        "name": "Dew point"
+      },
+      "absolute_humidity": {
+        "name": "Absolute humidity"
+      },
+      "vpd": {
+        "name": "Vapor pressure deficit"
+      }
+    },
+    "binary_sensor": {
+      "battery_low": {
+        "name": "Battery low"
+      },
+      "connectivity": {
+        "name": "Connectivity"
+      },
+      "door": {
+        "name": "Door"
+      },
+      "vibration": {
+        "name": "Vibration"
+      },
+      "alarm_door_open_long": {
+        "name": "Door open too long"
+      },
+      "alarm_door_closed_long": {
+        "name": "Door closed too long"
+      }
+    },
     "event": {
       "input": {
         "state_attributes": {
@@ -84,6 +159,23 @@
             }
           }
         }
+      },
+      "ms220_actions": {
+        "name": "Actions",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "doorbell": "Doorbell",
+              "button_single": "Button single press",
+              "button_double": "Button double press"
+            }
+          }
+        }
+      }
+    },
+    "button": {
+      "identify": {
+        "name": "Identify"
       }
     }
   }

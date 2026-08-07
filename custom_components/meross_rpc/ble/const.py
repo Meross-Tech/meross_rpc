@@ -1,0 +1,129 @@
+"""Constants and protocol contract for Meross HA BLE (ble_ha.md)."""
+
+from __future__ import annotations
+
+from enum import StrEnum
+from logging import Logger, getLogger
+
+from ..const import DOMAIN
+
+MANUFACTURER = "Meross"
+LOGGER: Logger = getLogger(__package__)
+
+DEFAULT_RETRY_COUNT = 3
+CONF_RETRY_COUNT = "retry_count"
+CONF_MODEL = "model"
+
+DEVICE_STARTUP_TIMEOUT = 30
+
+# ---------------------------------------------------------------------------
+# Discovery / advertisement (ble_ha.md)
+# ---------------------------------------------------------------------------
+# 16-bit Service Data UUID 0x30be (on-air byte order: 30 BE)
+MEROSS_SERVICE_DATA_UUID = "0000be30-0000-1000-8000-00805f9b34fb"
+
+# App GATT reused by HA
+MEROSS_GATT_SERVICE = "99e7be30-0001-4c6b-98a2-70fcb3471a72"
+MEROSS_CHAR_WRITE = "99e7be30-0002-4c6b-98a2-70fcb3471a72"
+MEROSS_CHAR_NOTIFY = "99e7be30-0003-4c6b-98a2-70fcb3471a72"
+
+PROTOCOL_VER = 0x01
+FIXED_HEADER_LEN = 8
+BATTERY_UNAVAILABLE = 0xFF
+BATTERY_LOW_THRESHOLD = 20
+
+# Local name in Scan Response: Meross-<MODEL>-<MAC4>
+LOCAL_NAME_PREFIX = "Meross-"
+
+# ---------------------------------------------------------------------------
+# MEROSS_SUB_DEV_TYPE (broadcast byte 1)
+# ---------------------------------------------------------------------------
+SUBDEV_MS605 = 0xC0
+SUBDEV_MS220 = 0xD0
+SUBDEV_MS120 = 0xD1
+SUBDEV_MS420 = 0xE0
+SUBDEV_MS700 = 0xF0
+
+# Meross frame
+FRAME_HEAD = bytes([0x55, 0xAA])
+FRAME_TAIL = bytes([0xAA, 0x55])
+TRIGGER_SRC_HA_BLE = 0x13
+
+TAG_SPECIAL = 0x01
+TAG_ACK = 0x03
+TAG_HISTORY_DELETE = 0x07
+TAG_TEMP_HISTORY_COUNT = 0x46
+TAG_TEMP_HISTORY_DATA = 0x47
+TAG_HUMI_HISTORY_COUNT = 0x48
+TAG_HUMI_HISTORY_DATA = 0x49
+SPECIAL_IDENTIFY = 0x05
+SPECIAL_HEARTBEAT = 0x06
+ACK_SUCCESS = 0x00
+
+# MS120 history (tem_hum_query.md)
+HISTORY_PAGE_SIZE = 50
+HISTORY_RECORD_LEN = 8
+CONF_TEMP_HISTORY_NEXT_IDX = "temp_history_next_idx"
+CONF_HUMI_HISTORY_NEXT_IDX = "humidity_history_next_idx"
+
+
+class MerossModel(StrEnum):
+    """Internal model; stored in Config Entry data.model."""
+
+    MS605 = "ms605"
+    MS220 = "ms220"
+    MS120 = "ms120"
+    MS420 = "ms420"
+    MS700 = "ms700"
+
+
+# Need GATT for control / identify
+CONNECTABLE_MODELS = {
+    MerossModel.MS605,
+    MerossModel.MS220,
+    MerossModel.MS420,
+    MerossModel.MS700,
+}
+
+# State mainly from advertisements (Identify may still use GATT)
+PASSIVE_MODELS = {
+    MerossModel.MS120,
+    MerossModel.MS220,
+}
+
+# MS220 status / alarm bits (ms220_ha.md)
+MS220_STATUS_DOOR_OPEN = 0x01
+MS220_STATUS_VIBRATION = 0x02
+MS220_ALARM_DOOR_OPEN_LONG = 0x01
+MS220_ALARM_DOOR_CLOSED_LONG = 0x02
+
+# MS220 report_event codes (doorbell / big button; door/vibration use status)
+MS220_EVENT_DOORBELL = 0x06
+MS220_EVENT_BUTTON_SINGLE = 0x07
+MS220_EVENT_BUTTON_DOUBLE = 0x08
+
+MS220_EVENT_TYPES: dict[int, str] = {
+    MS220_EVENT_DOORBELL: "doorbell",
+    MS220_EVENT_BUTTON_SINGLE: "button_single",
+    MS220_EVENT_BUTTON_DOUBLE: "button_double",
+}
+
+SUBDEV_TO_MODEL: dict[int, MerossModel] = {
+    SUBDEV_MS605: MerossModel.MS605,
+    SUBDEV_MS220: MerossModel.MS220,
+    SUBDEV_MS120: MerossModel.MS120,
+    SUBDEV_MS420: MerossModel.MS420,
+    SUBDEV_MS700: MerossModel.MS700,
+}
+
+MODEL_FRIENDLY_NAME: dict[MerossModel, str] = {
+    MerossModel.MS605: "Meross MS605",
+    MerossModel.MS220: "Meross MS220",
+    MerossModel.MS120: "Meross MS120",
+    MerossModel.MS420: "Meross MS420",
+    MerossModel.MS700: "Meross MS700",
+}
+
+MODEL_TO_SUBDEV: dict[MerossModel, int] = {
+    model: subdev for subdev, model in SUBDEV_TO_MODEL.items()
+}

@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from logging import Logger, getLogger
 from typing import Final
 
 DOMAIN: Final = "meross_rpc"
 
 LOGGER: Logger = getLogger(__package__)
+
+# How the device is reached; missing key means legacy Wi-Fi entries.
+CONF_CONNECTION: Final = "connection"
+CONNECTION_WIFI: Final = "wifi"
+CONNECTION_BLUETOOTH: Final = "bluetooth"
+
+
+def is_bluetooth_connection(data: Mapping[str, object]) -> bool:
+    """Return True when the config entry (or candidate data) is BLE."""
+    return data.get(CONF_CONNECTION) == CONNECTION_BLUETOOTH
+
 
 # Check interval for  devices
 REFOSS_CHECK_INTERVAL = 60

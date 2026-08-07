@@ -1,19 +1,38 @@
 {
   "domain": "meross_rpc",
-  "name": "Meross RPC",
+  "name": "Meross",
   "codeowners": ["@ashionky"],
   "config_flow": true,
+  "after_dependencies": ["bluetooth"],
   "documentation": "https://github.com/Meross-Tech/meross_rpc/blob/master/README.md",
   "integration_type": "device",
   "iot_class": "local_push",
-  "loggers": ["aiorefoss"],
+  "loggers": ["aiorefoss", "custom_components.meross_rpc.ble"],
   "quality_scale": "bronze",
-  "requirements": ["aiorefoss==1.0.1"],
+  "requirements": ["aiorefoss==1.0.1", "bleak-retry-connector>=3.5.0"],
   "version": "1.0.1",
   "zeroconf": [
     {
       "type": "_http._tcp.local.",
       "name": "refoss*"
+    }
+  ],
+  "bluetooth": [
+    {
+      "connectable": true,
+      "service_data_uuid": "0000be30-0000-1000-8000-00805f9b34fb"
+    },
+    {
+      "connectable": false,
+      "service_data_uuid": "0000be30-0000-1000-8000-00805f9b34fb"
+    },
+    {
+      "connectable": true,
+      "service_uuid": "99e7be30-0001-4c6b-98a2-70fcb3471a72"
+    },
+    {
+      "connectable": true,
+      "local_name": "Meross-*"
     }
   ]
 }
