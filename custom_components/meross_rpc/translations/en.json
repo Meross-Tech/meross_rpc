@@ -132,8 +132,8 @@
       "connectivity": {
         "name": "Connectivity"
       },
-      "door": {
-        "name": "Door"
+      "opening": {
+        "name": "Opening"
       },
       "vibration": {
         "name": "Vibration"
@@ -160,17 +160,41 @@
           }
         }
       },
-      "ms220_actions": {
-        "name": "Actions",
+      "button": {
+        "name": "Button",
         "state_attributes": {
           "event_type": {
             "state": {
-              "doorbell": "Doorbell",
-              "button_single": "Button single press",
-              "button_double": "Button double press"
+              "press_end": "Press",
+              "multi_press_end": "Multi press"
             }
           }
         }
+      },
+      "ms700_button": {
+        "name": "Button {number}",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "press_end": "Press"
+            }
+          }
+        }
+      },
+      "doorbell": {
+        "name": "Doorbell",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "ring": "Ring"
+            }
+          }
+        }
+      }
+    },
+    "light": {
+      "night_light": {
+        "name": "Night light"
       }
     },
     "button": {

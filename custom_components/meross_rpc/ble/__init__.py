@@ -24,6 +24,7 @@ PLATFORMS_BY_MODEL: dict[MerossModel, list[Platform]] = {
         Platform.BINARY_SENSOR,
         Platform.SENSOR,
         Platform.EVENT,
+        Platform.LIGHT,
         Platform.BUTTON,
     ],
     MerossModel.MS605: [
@@ -39,9 +40,9 @@ PLATFORMS_BY_MODEL: dict[MerossModel, list[Platform]] = {
         Platform.BUTTON,
     ],
     MerossModel.MS700: [
-        Platform.SWITCH,
         Platform.SENSOR,
         Platform.BINARY_SENSOR,
+        Platform.EVENT,
         Platform.BUTTON,
     ],
 }
@@ -87,7 +88,10 @@ async def async_setup_bluetooth_entry(
     await hass.config_entries.async_forward_entry_setups(
         entry, PLATFORMS_BY_MODEL[model]
     )
-    coordinator.async_schedule_history_sync()
+    if model is MerossModel.MS120:
+        # Setup / reload: ask firmware for anything newer than last import.
+        coordinator.history_force_full_resync = True
+        coordinator.async_schedule_history_sync()
     return True
 
 

@@ -123,23 +123,43 @@ def _parse_events(payload: bytes, report_cnt: int) -> tuple[list[tuple[int, int]
     return events, offset
 
 
+def _parse_temp_humidity_product_data(
+    product_data: bytes, data: dict[str, Any]
+) -> None:
+    """Parse temp/humidity product_data and derive AH / dew point / VPD."""
+    if len(product_data) < 4:
+        return
+    # ms120.md / ms700.md: temp int16 BE 0.01C, humidity uint16 BE 0.01%
+    temp_raw = int.from_bytes(product_data[0:2], "big", signed=True)
+    humi_raw = int.from_bytes(product_data[2:4], "big", signed=False)
+    temperature = round(temp_raw / 100, 2)
+    humidity = round(humi_raw / 100, 2)
+    data["temperature"] = temperature
+    data["humidity"] = humidity
+    # Derived locally; device does not advertise these
+    data["dew_point"] = dew_point_celsius(temperature, humidity)
+    data["absolute_humidity"] = absolute_humidity_gm3(temperature, humidity)
+    data["vpd"] = vapor_pressure_deficit_kpa(temperature, humidity)
+
+
+def _parse_ms700_product_data(product_data: bytes, data: dict[str, Any]) -> None:
+    """MS700: temp/humidity + screen_enable bitmap (ms700.md)."""
+    _parse_temp_humidity_product_data(product_data, data)
+    if len(product_data) < 5:
+        return
+    # bit0–2: screen 1–3 enable; bit3–7 reserved
+    data["screen_enable"] = product_data[4] & 0x07
+
+
 def _parse_product_data(
     model: MerossModel, product_data: bytes, data: dict[str, Any]
 ) -> None:
     """Fill model-specific fields from product_data."""
-    if model == MerossModel.MS120 and len(product_data) >= 4:
-        # ms120.md: temp int16 BE 0.01C, humidity uint16 BE 0.01%
-        temp_raw = int.from_bytes(product_data[0:2], "big", signed=True)
-        humi_raw = int.from_bytes(product_data[2:4], "big", signed=False)
-        temperature = round(temp_raw / 100, 2)
-        humidity = round(humi_raw / 100, 2)
-        data["temperature"] = temperature
-        data["humidity"] = humidity
-        # Derived locally; device does not advertise these (ms120.md)
-        data["dew_point"] = dew_point_celsius(temperature, humidity)
-        data["absolute_humidity"] = absolute_humidity_gm3(temperature, humidity)
-        data["vpd"] = vapor_pressure_deficit_kpa(temperature, humidity)
-    # MS220: no product_data (ms220_ha.md)
+    if model is MerossModel.MS700:
+        _parse_ms700_product_data(product_data, data)
+    elif model is MerossModel.MS120:
+        _parse_temp_humidity_product_data(product_data, data)
+    # MS220: no product_data (ms220.md)
 
 
 def _parse_ms220_status(status: int, alarm_status: int, data: dict[str, Any]) -> None:
@@ -183,9 +203,10 @@ def _parse_payload(payload: bytes, model: MerossModel) -> tuple[dict[str, Any], 
 
     if model == MerossModel.MS220:
         _parse_ms220_status(status, alarm_status, data)
-    elif model in (MerossModel.MS605, MerossModel.MS420, MerossModel.MS700):
+    elif model in (MerossModel.MS605, MerossModel.MS420):
         # Product HA docs TBD — provisional: bit0 as power
         data["isOn"] = bool(status & 0x01)
+    # MS700: status/alarm fixed 0x00; buttons via report_event (ms700.md)
 
     events, pd_offset = _parse_events(payload, report_cnt)
     product_data = payload[pd_offset:]

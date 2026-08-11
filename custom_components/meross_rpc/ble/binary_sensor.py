@@ -39,9 +39,9 @@ COMMON_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
 
 MS220_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
     MerossBLEBinarySensorEntityDescription(
-        key="door",
-        translation_key="door",
-        device_class=BinarySensorDeviceClass.DOOR,
+        key="opening",
+        translation_key="opening",
+        device_class=BinarySensorDeviceClass.OPENING,
         value_key="door_open",
     ),
     MerossBLEBinarySensorEntityDescription(

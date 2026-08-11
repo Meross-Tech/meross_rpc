@@ -65,6 +65,8 @@ HISTORY_PAGE_SIZE = 50
 HISTORY_RECORD_LEN = 8
 CONF_TEMP_HISTORY_NEXT_IDX = "temp_history_next_idx"
 CONF_HUMI_HISTORY_NEXT_IDX = "humidity_history_next_idx"
+CONF_TEMP_HISTORY_LAST_TS = "temp_history_last_ts"
+CONF_HUMI_HISTORY_LAST_TS = "humidity_history_last_ts"
 
 
 class MerossModel(StrEnum):
@@ -89,6 +91,7 @@ CONNECTABLE_MODELS = {
 PASSIVE_MODELS = {
     MerossModel.MS120,
     MerossModel.MS220,
+    MerossModel.MS700,
 }
 
 # MS220 status / alarm bits (ms220_ha.md)
@@ -102,11 +105,35 @@ MS220_EVENT_DOORBELL = 0x06
 MS220_EVENT_BUTTON_SINGLE = 0x07
 MS220_EVENT_BUTTON_DOUBLE = 0x08
 
-MS220_EVENT_TYPES: dict[int, str] = {
-    MS220_EVENT_DOORBELL: "doorbell",
-    MS220_EVENT_BUTTON_SINGLE: "button_single",
-    MS220_EVENT_BUTTON_DOUBLE: "button_double",
-}
+# MS700: report_event packs screen (1–3) + button (1–3) → logical buttons 1–9
+MS700_BUTTON_COUNT = 9
+MS700_SCREEN_COUNT = 3
+MS700_BUTTONS_PER_SCREEN = 3
+# product_data screen_enable: bit0=screen1, bit1=screen2, bit2=screen3
+MS700_SCREEN_ENABLE_ALL = 0x07
+
+
+def ms700_logical_button(event_code: int) -> int | None:
+    """Map MS700 report_event byte to logical button 1–9 (ms700.md)."""
+    if event_code & 0xF0:
+        return None
+    button_id = event_code & 0x03
+    screen_id = (event_code >> 2) & 0x03
+    if button_id < 1 or button_id > 3 or screen_id < 1 or screen_id > 3:
+        return None
+    return (screen_id - 1) * 3 + button_id
+
+
+def ms700_screen_for_button(button_number: int) -> int:
+    """Logical button 1–9 → screen_id 1–3."""
+    return (button_number - 1) // MS700_BUTTONS_PER_SCREEN + 1
+
+
+def ms700_button_enabled(button_number: int, screen_enable: int) -> bool:
+    """Whether logical button is on an enabled screen (ms700.md screen_enable)."""
+    screen_id = ms700_screen_for_button(button_number)
+    return bool(screen_enable & (1 << (screen_id - 1)))
+
 
 SUBDEV_TO_MODEL: dict[int, MerossModel] = {
     SUBDEV_MS605: MerossModel.MS605,

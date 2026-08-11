@@ -5,6 +5,7 @@ from __future__ import annotations
 from homeassistant.components.button import ButtonEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import MerossBLEConfigEntry, MerossBLEDataUpdateCoordinator
@@ -30,6 +31,11 @@ class MerossBLEIdentifyButton(MerossBLEEntity, ButtonEntity):
     def __init__(self, coordinator: MerossBLEDataUpdateCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.base_unique_id}-identify"
+
+    async def async_internal_added_to_hass(self) -> None:
+        # Skip ButtonEntity last-press restore — otherwise Activity shows
+        # "Identify Pressed" at every HA restart.
+        await Entity.async_internal_added_to_hass(self)
 
     async def async_press(self) -> None:
         try:

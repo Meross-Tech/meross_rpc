@@ -25,6 +25,7 @@ from .const import (
     TAG_TEMP_HISTORY_COUNT,
     TAG_TEMP_HISTORY_DATA,
     MerossModel,
+    ms700_logical_button,
 )
 from .parser import MerossAdvertisement
 from .protocol import (
@@ -34,6 +35,7 @@ from .protocol import (
     build_identify_frame,
     build_temp_history_count_frame,
     build_temp_history_data_frame,
+    iter_tlvs,
     parse_ack_success,
     parse_history_count,
     parse_history_samples,
@@ -61,8 +63,15 @@ class MerossBLEDevice:
         self._data: dict[str, Any] = {}
         self._last_adv: MerossAdvertisement | None = None
         self._msg_id = 0
-        # Event dedup: report_event -> last report_reqId (ble_ha.md §2)
-        self._last_event_ids: dict[int, int] = {}
+        # Instantaneous report_reqId: accept each id once (rebroadcasts keep same id).
+        # Do not clear on idle ads — firmware may briefly idle then rebroadcast the
+        # same press, which previously caused duplicate HA events / "stuck" presses.
+        self._last_accepted_req_id: int | None = None
+        self._last_seen_req_id: int | None = None
+        self._stale_event_logged_for: int | None = None
+        # First event-carrying adv after process start is often a sticky
+        # rebroadcast from before HA restarted — sync req_id, do not fire.
+        self._event_req_id_bootstrapped = False
 
     @property
     def address(self) -> str:
@@ -93,7 +102,9 @@ class MerossBLEDevice:
         ignore = {"rssi", "address", "product_data"}
         old = {k: v for k, v in self._last_adv.data.items() if k not in ignore}
         new = {k: v for k, v in adv.data.items() if k not in ignore}
-        return old != new or bool(adv.events)
+        # Events are handled via update_from_advertisement return value; do not
+        # treat sticky/rebroadcast presses as a data change by themselves.
+        return old != new
 
     def update_from_advertisement(self, adv: MerossAdvertisement) -> list[tuple[int, int]]:
         """Apply ad state; return new (non-duplicate) instantaneous events."""
@@ -102,13 +113,101 @@ class MerossBLEDevice:
         self._data.update(adv.data)
         self._data["rssi"] = adv.rssi
 
+        if not adv.events:
+            return []
+
+        if not self._event_req_id_bootstrapped:
+            self._event_req_id_bootstrapped = True
+            req_id, event_code = adv.events[0]
+            self._last_accepted_req_id = req_id
+            self._last_seen_req_id = req_id
+            _LOGGER.info(
+                "%s: bootstrap event req_id=%s event=%#x — ignore sticky "
+                "press from before HA start; wait for newer req_id",
+                self.address,
+                req_id,
+                event_code,
+            )
+            return []
+
         new_events: list[tuple[int, int]] = []
         for req_id, event_code in adv.events:
-            last = self._last_event_ids.get(event_code)
-            if last == req_id:
-                continue
-            self._last_event_ids[event_code] = req_id
+            button_id = event_code & 0x03
+            screen_id = (event_code >> 2) & 0x03
+            logical = (
+                ms700_logical_button(event_code)
+                if self.model is MerossModel.MS700
+                else None
+            )
+
+            prev_seen = self._last_seen_req_id
+            if prev_seen is not None:
+                seen_gap = (req_id - prev_seen) & 0xFF
+                if 1 < seen_gap <= 128:
+                    _LOGGER.warning(
+                        "%s: BLE MISSED presses — req_id jumped %s → %s "
+                        "(gap=%s). Advertisement not delivered to HA.",
+                        self.address,
+                        prev_seen,
+                        req_id,
+                        seen_gap - 1,
+                    )
+            self._last_seen_req_id = req_id
+
+            if self.model is MerossModel.MS700:
+                _LOGGER.info(
+                    "%s: MS700 adv event raw req_id=%s event=%#x "
+                    "screen=%s button=%s logical=%s product_data=%s",
+                    self.address,
+                    req_id,
+                    event_code,
+                    screen_id,
+                    button_id,
+                    logical,
+                    adv.data.get("product_data"),
+                )
+                if logical is None:
+                    _LOGGER.warning(
+                        "%s: MS700 UNMAPPED event=%#x (screen=%s button=%s)",
+                        self.address,
+                        event_code,
+                        screen_id,
+                        button_id,
+                    )
+
+            # Accept each report_reqId once. gap==0 → rebroadcast; gap>128 →
+            # older stale packet after a newer id was already accepted.
+            if self._last_accepted_req_id is not None:
+                accept_gap = (req_id - self._last_accepted_req_id) & 0xFF
+                if accept_gap == 0 or accept_gap > 128:
+                    if (
+                        self.model is MerossModel.MS700
+                        and accept_gap == 0
+                        and self._stale_event_logged_for != req_id
+                    ):
+                        self._stale_event_logged_for = req_id
+                        _LOGGER.info(
+                            "%s: MS700 sticky/rebroadcast req_id=%s event=%#x "
+                            "(logical=%s) — ignoring until req_id advances",
+                            self.address,
+                            req_id,
+                            event_code,
+                            logical,
+                        )
+                    continue
+
+            self._last_accepted_req_id = req_id
+            self._stale_event_logged_for = None
             new_events.append((req_id, event_code))
+            if self.model is MerossModel.MS700:
+                _LOGGER.info(
+                    "%s: MS700 ACCEPT press → HA Button %s "
+                    "(req_id=%s event=%#x)",
+                    self.address,
+                    logical,
+                    req_id,
+                    event_code,
+                )
         return new_events
 
     def poll_needed(self, seconds_since_last_poll: float | None) -> bool:
@@ -179,7 +278,7 @@ class MerossBLEDevice:
                 )
             except Exception as err:  # noqa: BLE001
                 last_error = err
-                _LOGGER.debug(
+                _LOGGER.warning(
                     "%s history fetch failed (%s/%s): %s",
                     self.address,
                     attempt,
@@ -217,17 +316,57 @@ class MerossBLEDevice:
         samples: list[HistorySample] = []
         try:
             await client.start_notify(MEROSS_CHAR_NOTIFY, _on_notify)
+            # Give CCCD enable time before first write (CoreBluetooth often needs this).
+            await asyncio.sleep(0.5)
 
+            count_frame = count_builder(self.subdev_type, self._next_msg_id())
+            _LOGGER.info(
+                "%s: history COUNT request tag=%#x write=%s",
+                self.address,
+                count_tag,
+                count_frame.hex(),
+            )
             count_raw = await self._exchange(
                 client,
                 notify,
                 payload_box,
-                lambda: count_builder(self.subdev_type, self._next_msg_id()),
+                lambda frame=count_frame: frame,
+                write_with_response=False,
+                timeout=10.0,
+            )
+            _LOGGER.info(
+                "%s: history COUNT notify tag=%#x raw=%s",
+                self.address,
+                count_tag,
+                count_raw.hex() if count_raw else "<empty>",
             )
             total = parse_history_count(count_raw, count_tag)
             if total is None:
-                raise MerossBLEError(f"Invalid history count response for tag {count_tag:#x}")
+                if not count_raw:
+                    raise MerossBLEError(
+                        f"No history count notify for tag {count_tag:#x} "
+                        f"(timeout/empty); write={count_frame.hex()}"
+                    )
+                tags = [(tag, value.hex()) for tag, value in iter_tlvs(count_raw)]
+                raise MerossBLEError(
+                    f"Invalid history count response for tag {count_tag:#x}; "
+                    f"tlvs={tags} raw={count_raw.hex()}"
+                )
+            _LOGGER.info(
+                "%s: history COUNT ok tag=%#x total=%s start_idx=%s",
+                self.address,
+                count_tag,
+                total,
+                start_idx,
+            )
             if total <= start_idx:
+                _LOGGER.info(
+                    "%s: history nothing new tag=%#x (total=%s <= start_idx=%s)",
+                    self.address,
+                    count_tag,
+                    total,
+                    start_idx,
+                )
                 return []
 
             cursor = start_idx
@@ -236,17 +375,37 @@ class MerossBLEDevice:
                 page_end = min(cursor + HISTORY_PAGE_SIZE, end_exclusive) - 1
                 start = cursor
                 end = page_end
+                data_frame = data_builder(
+                    self.subdev_type, start, end, self._next_msg_id()
+                )
+                _LOGGER.info(
+                    "%s: history DATA request tag=%#x idx=%s-%s write=%s",
+                    self.address,
+                    data_tag,
+                    start,
+                    end,
+                    data_frame.hex(),
+                )
                 page_raw = await self._exchange(
                     client,
                     notify,
                     payload_box,
-                    lambda s=start, e=end: data_builder(
-                        self.subdev_type, s, e, self._next_msg_id()
-                    ),
+                    lambda frame=data_frame: frame,
+                    write_with_response=False,
+                    timeout=10.0,
+                )
+                _LOGGER.info(
+                    "%s: history DATA notify tag=%#x idx=%s-%s raw_len=%s raw=%s",
+                    self.address,
+                    data_tag,
+                    start,
+                    end,
+                    len(page_raw) if page_raw else 0,
+                    page_raw.hex() if page_raw else "<empty>",
                 )
                 page = parse_history_samples(page_raw, data_tag, scale=scale)
                 if not page:
-                    _LOGGER.debug(
+                    _LOGGER.warning(
                         "%s: empty history page %s-%s tag=%#x",
                         self.address,
                         cursor,
@@ -254,6 +413,30 @@ class MerossBLEDevice:
                         data_tag,
                     )
                     break
+                if data_tag == TAG_TEMP_HISTORY_DATA:
+                    # Decode first record raw int16 for unit debugging
+                    for tag, value in iter_tlvs(page_raw):
+                        if tag == data_tag and len(value) >= 8:
+                            raw16 = int.from_bytes(value[6:8], "big", signed=True)
+                            _LOGGER.info(
+                                "%s: TEMP RAW sample0 idx=%s raw_int16=%s "
+                                "/100=%.2f°C (≈%.2f°F) parsed0=%s",
+                                self.address,
+                                int.from_bytes(value[0:2], "big"),
+                                raw16,
+                                raw16 / 100,
+                                raw16 / 100 * 9 / 5 + 32,
+                                page[0].value,
+                            )
+                            break
+                _LOGGER.info(
+                    "%s: history DATA parsed %s samples tag=%#x first=%s last=%s",
+                    self.address,
+                    len(page),
+                    data_tag,
+                    (page[0].timestamp.isoformat(), page[0].value),
+                    (page[-1].timestamp.isoformat(), page[-1].value),
+                )
                 samples.extend(page)
                 cursor = page_end + 1
             return samples
@@ -311,27 +494,37 @@ class MerossBLEDevice:
         notify: asyncio.Event,
         payload_box: dict[str, bytes],
         frame_factory: Callable[[], bytes],
+        *,
+        write_with_response: bool = True,
+        timeout: float = 5.0,
     ) -> bytes:
         notify.clear()
         payload_box.pop("data", None)
         frame = frame_factory()
-        await client.write_gatt_char(MEROSS_CHAR_WRITE, frame, response=True)
+        await client.write_gatt_char(
+            MEROSS_CHAR_WRITE, frame, response=write_with_response
+        )
         try:
-            async with asyncio.timeout(5):
+            async with asyncio.timeout(timeout):
                 await notify.wait()
         except TimeoutError:
-            _LOGGER.debug("%s: no notify for frame %s", self.address, frame.hex())
+            _LOGGER.info(
+                "%s: no notify within %.1fs for frame %s",
+                self.address,
+                timeout,
+                frame.hex(),
+            )
             return b""
         return payload_box.get("data", b"")
 
 
 class MerossBLESwitch(MerossBLEDevice):
-    """Connectable switch-like device (MS220/MS605). Control TLV TBD per product doc."""
+    """Connectable switch-like device (MS605 etc.). Control TLV TBD per product doc."""
 
     def __init__(
         self,
         device: BLEDevice,
-        model: MerossModel = MerossModel.MS220,
+        model: MerossModel = MerossModel.MS605,
         retry_count: int = DEFAULT_RETRY_COUNT,
     ) -> None:
         super().__init__(device, model, retry_count)
@@ -361,12 +554,44 @@ class MerossBLESwitch(MerossBLEDevice):
         raise MerossBLEError("Switch control TLV not defined for this model yet")
 
 
+class MerossBLEMS220(MerossBLEDevice):
+    """MS220 door contact: opening/vibration/events + night light (GATT TBD)."""
+
+    def __init__(
+        self,
+        device: BLEDevice,
+        model: MerossModel = MerossModel.MS220,
+        retry_count: int = DEFAULT_RETRY_COUNT,
+    ) -> None:
+        super().__init__(device, model, retry_count)
+        self._night_light_on = False
+
+    @property
+    def night_light_on(self) -> bool:
+        return self._night_light_on
+
+    async def async_set_night_light(self, is_on: bool) -> None:
+        """Set night light on/off.
+
+        ms220.md currently only documents advertisement status/events; the GATT
+        TLV for night-light control is not published yet.
+        """
+        _LOGGER.warning(
+            "%s: night light TLV not defined in ms220.md yet (requested %s)",
+            self.address,
+            "on" if is_on else "off",
+        )
+        raise MerossBLEError(
+            "Night light control TLV not defined in MS220 HA BLE doc yet"
+        )
+
+
 DEVICE_CLASS_BY_MODEL: dict[MerossModel, Callable[..., MerossBLEDevice]] = {
     MerossModel.MS120: MerossBLEDevice,
-    MerossModel.MS220: MerossBLEDevice,  # door / vibration / button events (ms220_ha.md)
+    MerossModel.MS220: MerossBLEMS220,
     MerossModel.MS605: MerossBLESwitch,
     MerossModel.MS420: MerossBLESwitch,
-    MerossModel.MS700: MerossBLESwitch,
+    MerossModel.MS700: MerossBLEDevice,
 }
 
 
@@ -379,4 +604,6 @@ def create_device(
     cls = DEVICE_CLASS_BY_MODEL.get(model, MerossBLEDevice)
     if cls is MerossBLESwitch:
         return MerossBLESwitch(device, model=model, retry_count=retry_count)
+    if cls is MerossBLEMS220:
+        return MerossBLEMS220(device, model=model, retry_count=retry_count)
     return cls(device, model, retry_count)

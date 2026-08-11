@@ -61,6 +61,8 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         self._was_unavailable = True
         self._history_lock = asyncio.Lock()
         self._history_task: asyncio.Task[None] | None = None
+        # After BLE unavailable, re-pull full firmware buffer (ring buffer may wrap).
+        self.history_force_full_resync = False
         # Instantaneous events from the latest advertisement (after dedup)
         self.last_new_events: list[tuple[int, int]] = []
 
@@ -115,14 +117,28 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         if not changed and not new_events and not recovered:
             return
         self._was_unavailable = False
-        _LOGGER.debug(
-            "%s: Meross BLE data: %s events=%s",
-            self.ble_device.address,
-            adv.data,
-            new_events,
-        )
+        if new_events:
+            _LOGGER.info(
+                "%s: Meross BLE events=%s data_keys=%s",
+                self.ble_device.address,
+                new_events,
+                sorted(k for k in adv.data if k in ("temperature", "humidity", "battery")),
+            )
+        else:
+            _LOGGER.debug(
+                "%s: Meross BLE data: %s events=%s",
+                self.ble_device.address,
+                adv.data,
+                new_events,
+            )
         super()._async_handle_bluetooth_event(service_info, change)
         if recovered and self.model is MerossModel.MS120:
+            _LOGGER.info(
+                "%s: device recovered from unavailable → scheduling history sync "
+                "(force full firmware pull for local gap fill)",
+                self.ble_device.address,
+            )
+            self.history_force_full_resync = True
             self.async_schedule_history_sync()
 
     @callback
@@ -131,14 +147,23 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         if self.model is not MerossModel.MS120:
             return
         if self._history_task and not self._history_task.done():
+            _LOGGER.info(
+                "%s: history sync already running, skip schedule",
+                self.ble_device.address,
+            )
             return
+
+        _LOGGER.info(
+            "%s: scheduling MS120 history sync task",
+            self.ble_device.address,
+        )
 
         async def _run() -> None:
             async with self._history_lock:
                 await async_sync_ms120_history(self.hass, self)
 
         self._history_task = self.hass.async_create_task(
-            _run(), name=f"meross_ble_history_{self.base_unique_id}"
+            _run(), name=f"meross_rpc_ble_history_{self.base_unique_id}"
         )
 
     async def async_wait_ready(self) -> bool:
