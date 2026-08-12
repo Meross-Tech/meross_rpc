@@ -66,13 +66,35 @@ MS220_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
     ),
 )
 
+# ms420.md status: bit0 rain/droplet, bit1 standing water, bit2 freeze risk.
+# Extension probe / rain sensitivity / probe threshold need GATT not in ms420.md yet.
+MS420_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
+    MerossBLEBinarySensorEntityDescription(
+        key="water_leak",
+        translation_key="water_leak",
+        device_class=BinarySensorDeviceClass.MOISTURE,
+        value_key="water_leak",
+    ),
+    MerossBLEBinarySensorEntityDescription(
+        key="rain_detected",
+        translation_key="rain_detected",
+        device_class=BinarySensorDeviceClass.MOISTURE,
+        value_key="rain_detected",
+    ),
+    MerossBLEBinarySensorEntityDescription(
+        key="freeze_alarm",
+        translation_key="freeze_alarm",
+        device_class=BinarySensorDeviceClass.COLD,
+        value_key="freeze_alarm",
+    ),
+)
+
 BINARY_SENSORS_BY_MODEL: dict[
     MerossModel, tuple[MerossBLEBinarySensorEntityDescription, ...]
 ] = {
     MerossModel.MS120: COMMON_BINARY_SENSORS,
     MerossModel.MS220: (*COMMON_BINARY_SENSORS, *MS220_BINARY_SENSORS),
-    MerossModel.MS605: COMMON_BINARY_SENSORS,
-    MerossModel.MS420: COMMON_BINARY_SENSORS,
+    MerossModel.MS420: (*COMMON_BINARY_SENSORS, *MS420_BINARY_SENSORS),
     MerossModel.MS700: COMMON_BINARY_SENSORS,
 }
 
@@ -119,7 +141,12 @@ class MerossBLEBinarySensor(MerossBLEEntity, BinarySensorEntity):
 
 
 class MerossBLEConnectivitySensor(MerossBLEEntity, BinarySensorEntity):
-    """True while BLE advertisements are being received."""
+    """True while BLE advertisements are being received.
+
+    Follows coordinator availability (do not force available=True): when ads
+    stop, this entity becomes unavailable with the rest of the device so the
+    HA device list can show the yellow unavailable warning.
+    """
 
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -128,10 +155,6 @@ class MerossBLEConnectivitySensor(MerossBLEEntity, BinarySensorEntity):
     def __init__(self, coordinator: MerossBLEDataUpdateCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.base_unique_id}-connectivity"
-
-    @property
-    def available(self) -> bool:
-        return True
 
     @property
     def is_on(self) -> bool:

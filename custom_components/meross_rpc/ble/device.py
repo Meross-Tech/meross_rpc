@@ -225,11 +225,27 @@ class MerossBLEDevice:
     async def identify(self) -> bool:
         """Send Identify (beep/flash) over GATT."""
         frame = build_identify_frame(self.subdev_type, self._next_msg_id())
+        _LOGGER.info(
+            "%s: Identify GATT write starting frame=%s",
+            self.address,
+            frame.hex(),
+        )
         raw = await self._request_raw(frame)
         # No notify still counts as success for identify (device may not ACK)
         if not raw:
+            _LOGGER.info(
+                "%s: Identify write done (no notify ACK)",
+                self.address,
+            )
             return True
-        return parse_ack_success(raw)
+        ok = parse_ack_success(raw)
+        _LOGGER.info(
+            "%s: Identify write done ack_ok=%s notify=%s",
+            self.address,
+            ok,
+            raw.hex(),
+        )
+        return ok
 
     async def fetch_temperature_history(
         self, start_idx: int = 0
@@ -518,42 +534,6 @@ class MerossBLEDevice:
         return payload_box.get("data", b"")
 
 
-class MerossBLESwitch(MerossBLEDevice):
-    """Connectable switch-like device (MS605 etc.). Control TLV TBD per product doc."""
-
-    def __init__(
-        self,
-        device: BLEDevice,
-        model: MerossModel = MerossModel.MS605,
-        retry_count: int = DEFAULT_RETRY_COUNT,
-    ) -> None:
-        super().__init__(device, model, retry_count)
-        self._data.setdefault("isOn", False)
-
-    @property
-    def is_on(self) -> bool:
-        return bool(self._data.get("isOn"))
-
-    def poll_needed(self, seconds_since_last_poll: float | None) -> bool:
-        if seconds_since_last_poll is None:
-            return True
-        return seconds_since_last_poll > 60 * 60
-
-    async def turn_on(self) -> bool:
-        """Placeholder until product TLV for on is published."""
-        _LOGGER.warning(
-            "%s: turn_on TLV not defined in product HA doc yet", self.address
-        )
-        raise MerossBLEError("Switch control TLV not defined for this model yet")
-
-    async def turn_off(self) -> bool:
-        """Placeholder until product TLV for off is published."""
-        _LOGGER.warning(
-            "%s: turn_off TLV not defined in product HA doc yet", self.address
-        )
-        raise MerossBLEError("Switch control TLV not defined for this model yet")
-
-
 class MerossBLEMS220(MerossBLEDevice):
     """MS220 door contact: opening/vibration/events + night light (GATT TBD)."""
 
@@ -589,8 +569,7 @@ class MerossBLEMS220(MerossBLEDevice):
 DEVICE_CLASS_BY_MODEL: dict[MerossModel, Callable[..., MerossBLEDevice]] = {
     MerossModel.MS120: MerossBLEDevice,
     MerossModel.MS220: MerossBLEMS220,
-    MerossModel.MS605: MerossBLESwitch,
-    MerossModel.MS420: MerossBLESwitch,
+    MerossModel.MS420: MerossBLEDevice,
     MerossModel.MS700: MerossBLEDevice,
 }
 
@@ -602,8 +581,6 @@ def create_device(
 ) -> MerossBLEDevice:
     """Factory for model-specific wrappers."""
     cls = DEVICE_CLASS_BY_MODEL.get(model, MerossBLEDevice)
-    if cls is MerossBLESwitch:
-        return MerossBLESwitch(device, model=model, retry_count=retry_count)
     if cls is MerossBLEMS220:
         return MerossBLEMS220(device, model=model, retry_count=retry_count)
     return cls(device, model, retry_count)

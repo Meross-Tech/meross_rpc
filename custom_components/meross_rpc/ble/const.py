@@ -15,6 +15,10 @@ CONF_RETRY_COUNT = "retry_count"
 CONF_MODEL = "model"
 
 DEVICE_STARTUP_TIMEOUT = 30
+# Local watchdog: mark unavailable if no parseable advertisement.
+# Needed on macOS where Bleak's discovered cache often never expires, so HA's
+# async_track_unavailable may never fire after battery removal / BT off.
+ADVERTISEMENT_STALE_SECONDS = 195
 
 # ---------------------------------------------------------------------------
 # Discovery / advertisement (ble_ha.md)
@@ -38,7 +42,6 @@ LOCAL_NAME_PREFIX = "Meross-"
 # ---------------------------------------------------------------------------
 # MEROSS_SUB_DEV_TYPE (broadcast byte 1)
 # ---------------------------------------------------------------------------
-SUBDEV_MS605 = 0xC0
 SUBDEV_MS220 = 0xD0
 SUBDEV_MS120 = 0xD1
 SUBDEV_MS420 = 0xE0
@@ -67,12 +70,13 @@ CONF_TEMP_HISTORY_NEXT_IDX = "temp_history_next_idx"
 CONF_HUMI_HISTORY_NEXT_IDX = "humidity_history_next_idx"
 CONF_TEMP_HISTORY_LAST_TS = "temp_history_last_ts"
 CONF_HUMI_HISTORY_LAST_TS = "humidity_history_last_ts"
+# Set after first successful Identify on add/bind (not resent on reload).
+CONF_BOUND_IDENTIFY_DONE = "bound_identify_done"
 
 
 class MerossModel(StrEnum):
     """Internal model; stored in Config Entry data.model."""
 
-    MS605 = "ms605"
     MS220 = "ms220"
     MS120 = "ms120"
     MS420 = "ms420"
@@ -81,7 +85,6 @@ class MerossModel(StrEnum):
 
 # Need GATT for control / identify
 CONNECTABLE_MODELS = {
-    MerossModel.MS605,
     MerossModel.MS220,
     MerossModel.MS420,
     MerossModel.MS700,
@@ -91,6 +94,7 @@ CONNECTABLE_MODELS = {
 PASSIVE_MODELS = {
     MerossModel.MS120,
     MerossModel.MS220,
+    MerossModel.MS420,
     MerossModel.MS700,
 }
 
@@ -104,6 +108,11 @@ MS220_ALARM_DOOR_CLOSED_LONG = 0x02
 MS220_EVENT_DOORBELL = 0x06
 MS220_EVENT_BUTTON_SINGLE = 0x07
 MS220_EVENT_BUTTON_DOUBLE = 0x08
+
+# MS420 status bits (ms420.md) — water leak / rain / freeze
+MS420_STATUS_RAIN = 0x01  # top droplet / rain
+MS420_STATUS_WATER_LEAK = 0x02  # bottom standing water / level
+MS420_STATUS_FREEZE = 0x04  # low temperature / freeze risk
 
 # MS700: report_event packs screen (1–3) + button (1–3) → logical buttons 1–9
 MS700_BUTTON_COUNT = 9
@@ -136,7 +145,6 @@ def ms700_button_enabled(button_number: int, screen_enable: int) -> bool:
 
 
 SUBDEV_TO_MODEL: dict[int, MerossModel] = {
-    SUBDEV_MS605: MerossModel.MS605,
     SUBDEV_MS220: MerossModel.MS220,
     SUBDEV_MS120: MerossModel.MS120,
     SUBDEV_MS420: MerossModel.MS420,
@@ -144,7 +152,6 @@ SUBDEV_TO_MODEL: dict[int, MerossModel] = {
 }
 
 MODEL_FRIENDLY_NAME: dict[MerossModel, str] = {
-    MerossModel.MS605: "Meross MS605",
     MerossModel.MS220: "Meross MS220",
     MerossModel.MS120: "Meross MS120",
     MerossModel.MS420: "Meross MS420",

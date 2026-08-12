@@ -4,15 +4,19 @@
     "step": {
       "user": {
         "title": "Meross",
-        "description": "Choose Wi-Fi or Bluetooth to set up your Meross device.",
+        "description": "Select your Meross product model. The integration will use Wi-Fi or Bluetooth automatically.",
         "menu_options": {
-          "wifi": "Meross WiFi devices",
-          "bluetooth_setup": "Meross Bluetooth devices"
+          "em06p": "EM06P (Wi-Fi)",
+          "em16p": "EM16P (Wi-Fi)",
+          "ms120": "MS120 (Bluetooth)",
+          "ms220": "MS220 (Bluetooth)",
+          "ms420": "MS420 (Bluetooth)",
+          "ms700": "MS700 (Bluetooth)"
         }
       },
       "wifi": {
         "title": "Meross Wi-Fi",
-        "description": "Before setup, devices must be connected to the network.\n\nThis path can be configured for Meross product models including em06p,em16p, etc. \n\nFor more information, please refer to 'Help'.",
+        "description": "Before setup, the {model} must be connected to the network.\n\nFor more information, please refer to 'Help'.",
         "data": {
           "host": "[%key:common::config_flow::data::host%]"
         },
@@ -50,7 +54,7 @@
       },
       "bluetooth_setup": {
         "title": "Meross Bluetooth",
-        "description": "Choose a discovered Meross BLE device.",
+        "description": "Choose a discovered {model} nearby.",
         "data": {
           "address": "Device"
         }
@@ -75,14 +79,15 @@
       "another_device": "Re-configuration was unsuccessful, the IP address/hostname of another Meross device was used.",
       "mac_address_mismatch": "[%key:component::meross_rpc::config::error::mac_address_mismatch%]",
       "no_bluetooth_adapter": "No Bluetooth adapter or proxy is configured in Home Assistant",
-      "no_devices_found": "No Meross Bluetooth devices found nearby",
+      "no_devices_found": "No {model} Bluetooth devices found nearby",
       "not_supported": "Device not supported"
     },
     "error": {
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
       "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
       "firmware_not_fully_supported": "Device not fully supported. Please contact Meross support",
-      "mac_address_mismatch": "The MAC address of the device does not match the one in the configuration, please reboot the device and try again."
+      "mac_address_mismatch": "The MAC address of the device does not match the one in the configuration, please reboot the device and try again.",
+      "identify_failed": "Could not connect to send Identify. Bring the device closer and try again."
     }
   },
   "options": {
@@ -143,6 +148,15 @@
       },
       "alarm_door_closed_long": {
         "name": "Door closed too long"
+      },
+      "water_leak": {
+        "name": "Water leak"
+      },
+      "rain_detected": {
+        "name": "Rain detected"
+      },
+      "freeze_alarm": {
+        "name": "Freeze alarm"
       }
     },
     "event": {

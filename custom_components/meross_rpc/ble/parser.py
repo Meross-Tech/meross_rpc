@@ -37,6 +37,9 @@ from .const import (
     MS220_ALARM_DOOR_OPEN_LONG,
     MS220_STATUS_DOOR_OPEN,
     MS220_STATUS_VIBRATION,
+    MS420_STATUS_FREEZE,
+    MS420_STATUS_RAIN,
+    MS420_STATUS_WATER_LEAK,
     PROTOCOL_VER,
     SUBDEV_TO_MODEL,
     MerossModel,
@@ -80,8 +83,6 @@ def _guess_model_from_name(name: str | None) -> MerossModel | None:
     if not name:
         return None
     upper = name.upper()
-    if "MS605" in upper:
-        return MerossModel.MS605
     if "MS220" in upper:
         return MerossModel.MS220
     if "MS120" in upper:
@@ -172,6 +173,13 @@ def _parse_ms220_status(status: int, alarm_status: int, data: dict[str, Any]) ->
     )
 
 
+def _parse_ms420_status(status: int, data: dict[str, Any]) -> None:
+    """Map MS420 water-leak status bitmap (ms420.md)."""
+    data["rain_detected"] = bool(status & MS420_STATUS_RAIN)
+    data["water_leak"] = bool(status & MS420_STATUS_WATER_LEAK)
+    data["freeze_alarm"] = bool(status & MS420_STATUS_FREEZE)
+
+
 def _parse_payload(payload: bytes, model: MerossModel) -> tuple[dict[str, Any], list[tuple[int, int]]]:
     data: dict[str, Any] = {
         "model": model,
@@ -203,9 +211,8 @@ def _parse_payload(payload: bytes, model: MerossModel) -> tuple[dict[str, Any], 
 
     if model == MerossModel.MS220:
         _parse_ms220_status(status, alarm_status, data)
-    elif model in (MerossModel.MS605, MerossModel.MS420):
-        # Product HA docs TBD — provisional: bit0 as power
-        data["isOn"] = bool(status & 0x01)
+    elif model is MerossModel.MS420:
+        _parse_ms420_status(status, data)
     # MS700: status/alarm fixed 0x00; buttons via report_event (ms700.md)
 
     events, pd_offset = _parse_events(payload, report_cnt)

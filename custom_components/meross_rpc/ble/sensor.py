@@ -38,7 +38,6 @@ SENSORS_BY_MODEL: dict[MerossModel, tuple[str, ...]] = {
         "vpd",
     ),
     MerossModel.MS220: ("battery",),
-    MerossModel.MS605: ("battery",),
     MerossModel.MS420: ("battery",),
     MerossModel.MS700: (
         "battery",

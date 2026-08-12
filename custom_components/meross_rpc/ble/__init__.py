@@ -27,16 +27,9 @@ PLATFORMS_BY_MODEL: dict[MerossModel, list[Platform]] = {
         Platform.LIGHT,
         Platform.BUTTON,
     ],
-    MerossModel.MS605: [
-        Platform.SWITCH,
-        Platform.SENSOR,
-        Platform.BINARY_SENSOR,
-        Platform.BUTTON,
-    ],
     MerossModel.MS420: [
-        Platform.SWITCH,
-        Platform.SENSOR,
         Platform.BINARY_SENSOR,
+        Platform.SENSOR,
         Platform.BUTTON,
     ],
     MerossModel.MS700: [

@@ -22,9 +22,7 @@ async def async_setup_entry(
     from .const import is_bluetooth_connection
 
     if is_bluetooth_connection(config_entry.data):
-        from .ble.switch import async_setup_entry as async_setup_ble_entry
-
-        await async_setup_ble_entry(hass, config_entry, async_add_entities)
+        # No BLE switch models currently.
         return
 
     coordinator = config_entry.runtime_data.coordinator
