@@ -19,12 +19,15 @@ from .coordinator import MerossBLEDataUpdateCoordinator
 from .device import create_device
 
 PLATFORMS_BY_MODEL: dict[MerossModel, list[Platform]] = {
-    MerossModel.MS120: [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON],
+    MerossModel.MS120: [
+        Platform.SENSOR,
+        Platform.BINARY_SENSOR,
+        Platform.BUTTON,
+    ],
     MerossModel.MS220: [
         Platform.BINARY_SENSOR,
         Platform.SENSOR,
         Platform.EVENT,
-        Platform.LIGHT,
         Platform.BUTTON,
     ],
     MerossModel.MS420: [

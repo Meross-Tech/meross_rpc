@@ -534,41 +534,9 @@ class MerossBLEDevice:
         return payload_box.get("data", b"")
 
 
-class MerossBLEMS220(MerossBLEDevice):
-    """MS220 door contact: opening/vibration/events + night light (GATT TBD)."""
-
-    def __init__(
-        self,
-        device: BLEDevice,
-        model: MerossModel = MerossModel.MS220,
-        retry_count: int = DEFAULT_RETRY_COUNT,
-    ) -> None:
-        super().__init__(device, model, retry_count)
-        self._night_light_on = False
-
-    @property
-    def night_light_on(self) -> bool:
-        return self._night_light_on
-
-    async def async_set_night_light(self, is_on: bool) -> None:
-        """Set night light on/off.
-
-        ms220.md currently only documents advertisement status/events; the GATT
-        TLV for night-light control is not published yet.
-        """
-        _LOGGER.warning(
-            "%s: night light TLV not defined in ms220.md yet (requested %s)",
-            self.address,
-            "on" if is_on else "off",
-        )
-        raise MerossBLEError(
-            "Night light control TLV not defined in MS220 HA BLE doc yet"
-        )
-
-
 DEVICE_CLASS_BY_MODEL: dict[MerossModel, Callable[..., MerossBLEDevice]] = {
     MerossModel.MS120: MerossBLEDevice,
-    MerossModel.MS220: MerossBLEMS220,
+    MerossModel.MS220: MerossBLEDevice,
     MerossModel.MS420: MerossBLEDevice,
     MerossModel.MS700: MerossBLEDevice,
 }
@@ -581,6 +549,4 @@ def create_device(
 ) -> MerossBLEDevice:
     """Factory for model-specific wrappers."""
     cls = DEVICE_CLASS_BY_MODEL.get(model, MerossBLEDevice)
-    if cls is MerossBLEMS220:
-        return MerossBLEMS220(device, model=model, retry_count=retry_count)
     return cls(device, model, retry_count)

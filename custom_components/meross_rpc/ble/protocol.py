@@ -168,7 +168,6 @@ def parse_history_samples(
     return samples
 
 
-# Convenience aliases matching tem_hum_query.md tags
 def build_temp_history_count_frame(subdev_type: int, msg_id: int = 1) -> bytes:
     return build_history_count_frame(subdev_type, TAG_TEMP_HISTORY_COUNT, msg_id)
 

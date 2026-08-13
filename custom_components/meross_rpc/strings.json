@@ -154,9 +154,6 @@
       },
       "rain_detected": {
         "name": "Rain detected"
-      },
-      "freeze_alarm": {
-        "name": "Freeze alarm"
       }
     },
     "event": {
@@ -204,11 +201,6 @@
             }
           }
         }
-      }
-    },
-    "light": {
-      "night_light": {
-        "name": "Night light"
       }
     },
     "button": {

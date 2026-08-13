@@ -608,7 +608,7 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class MerossBluetoothOptionsFlow(OptionsFlow):
-    """Options: GATT retry count for Bluetooth devices."""
+    """Options: GATT connection retry count."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -617,15 +617,14 @@ class MerossBluetoothOptionsFlow(OptionsFlow):
             return self.async_create_entry(title="", data=user_input)
 
         model = self.config_entry.data.get(CONF_MODEL, MerossModel.MS120)
+        options = self.config_entry.options
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Optional(
                         CONF_RETRY_COUNT,
-                        default=self.config_entry.options.get(
-                            CONF_RETRY_COUNT, DEFAULT_RETRY_COUNT
-                        ),
+                        default=options.get(CONF_RETRY_COUNT, DEFAULT_RETRY_COUNT),
                     ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
                 }
             ),

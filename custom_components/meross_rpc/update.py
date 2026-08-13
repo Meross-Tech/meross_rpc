@@ -55,7 +55,7 @@ async def async_setup_entry(
     config_entry: RefossConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up update  for device."""
+    """Set up update for device."""
     async_setup_entry_refoss(
         hass, config_entry, async_add_entities, REFOSS_UPDATES, RefossUpdateEntity
     )

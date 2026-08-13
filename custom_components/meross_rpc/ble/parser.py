@@ -37,7 +37,6 @@ from .const import (
     MS220_ALARM_DOOR_OPEN_LONG,
     MS220_STATUS_DOOR_OPEN,
     MS220_STATUS_VIBRATION,
-    MS420_STATUS_FREEZE,
     MS420_STATUS_RAIN,
     MS420_STATUS_WATER_LEAK,
     PROTOCOL_VER,
@@ -177,7 +176,6 @@ def _parse_ms420_status(status: int, data: dict[str, Any]) -> None:
     """Map MS420 water-leak status bitmap (ms420.md)."""
     data["rain_detected"] = bool(status & MS420_STATUS_RAIN)
     data["water_leak"] = bool(status & MS420_STATUS_WATER_LEAK)
-    data["freeze_alarm"] = bool(status & MS420_STATUS_FREEZE)
 
 
 def _parse_payload(payload: bytes, model: MerossModel) -> tuple[dict[str, Any], list[tuple[int, int]]]:
