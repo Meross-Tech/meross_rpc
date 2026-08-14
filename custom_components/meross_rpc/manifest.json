@@ -1,23 +1,7 @@
 {
   "domain": "meross_rpc",
   "name": "Meross",
-  "codeowners": ["@ashionky"],
-  "config_flow": true,
   "after_dependencies": ["bluetooth", "recorder"],
-  "documentation": "https://github.com/Meross-Tech/meross_rpc/blob/master/README.md",
-  "integration_type": "device",
-  "iot_class": "local_push",
-  "loggers": ["aiorefoss", "custom_components.meross_rpc", "custom_components.meross_rpc.ble"],
-  "quality_scale": "bronze",
-  "requirements": ["aiorefoss==1.0.1", "bleak-retry-connector>=3.5.0"],
-  "version": "1.0.1",
-  "issue_tracker": "https://github.com/Meross-Tech/meross_rpc/issues",
-  "zeroconf": [
-    {
-      "type": "_http._tcp.local.",
-      "name": "refoss*"
-    }
-  ],
   "bluetooth": [
     {
       "connectable": true,
@@ -34,6 +18,22 @@
     {
       "connectable": true,
       "local_name": "Meross-*"
+    }
+  ],
+  "codeowners": ["@ashionky"],
+  "config_flow": true,
+  "documentation": "https://github.com/Meross-Tech/meross_rpc/blob/master/README.md",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/Meross-Tech/meross_rpc/issues",
+  "loggers": ["aiorefoss", "custom_components.meross_rpc", "custom_components.meross_rpc.ble"],
+  "quality_scale": "bronze",
+  "requirements": ["aiorefoss==1.0.1", "bleak-retry-connector>=3.5.0"],
+  "version": "1.0.1",
+  "zeroconf": [
+    {
+      "type": "_http._tcp.local.",
+      "name": "refoss*"
     }
   ]
 }
