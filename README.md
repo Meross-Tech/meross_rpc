@@ -42,7 +42,7 @@ After copy-pasting the meross_rpc directory into the custom_components folder, y
 As soon as HomeAssistant is restarted, you can proceed with __component setup__.
 
 ## Configuration
-- In the HA UI go to "Configuration" -> "Integrations", click "+", search for "Meross RPC", and select the "Meross RPC" integration from the list.
+- In the HA UI go to "Configuration" -> "Integrations", click "+", search for "Meross", and select the "Meross" integration from the list.
   Or click here: [![Start Config Flow](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=meross_rpc)
 
 ## Supported device models
