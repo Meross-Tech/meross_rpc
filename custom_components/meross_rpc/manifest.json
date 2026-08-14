@@ -29,7 +29,7 @@
   "loggers": ["aiorefoss", "custom_components.meross_rpc", "custom_components.meross_rpc.ble"],
   "quality_scale": "bronze",
   "requirements": ["aiorefoss==1.0.1", "bleak-retry-connector>=3.5.0"],
-  "version": "1.0.1",
+  "version": "1.1.0",
   "zeroconf": [
     {
       "type": "_http._tcp.local.",
