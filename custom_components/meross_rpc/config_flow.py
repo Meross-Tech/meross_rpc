@@ -1,4 +1,4 @@
-"""Config flow for Refoss RPC integration."""
+"""Config flow for Meross (Wi-Fi RPC and Bluetooth)."""
 
 from __future__ import annotations
 
@@ -20,16 +20,85 @@ from aiorefoss.exceptions import (
 from aiorefoss.rpc_device import RpcDevice
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-from homeassistant.const import CONF_HOST, CONF_MAC, CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant
+from homeassistant.components import bluetooth
+from homeassistant.components.bluetooth import (
+    BluetoothServiceInfoBleak,
+    async_discovered_service_info,
+)
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.const import (
+    CONF_ADDRESS,
+    CONF_HOST,
+    CONF_MAC,
+    CONF_PASSWORD,
+    CONF_USERNAME,
+)
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
-from .const import DOMAIN, LOGGER
+from .ble.const import (
+    CONF_BOUND_IDENTIFY_DONE,
+    CONF_MODEL,
+    CONF_RETRY_COUNT,
+    DEFAULT_RETRY_COUNT,
+    MODEL_FRIENDLY_NAME,
+    MerossModel,
+)
+from .ble.device import MerossBLEError, create_device
+from .ble.parser import MerossAdvertisement, parse_advertisement_data
+from .const import (
+    CONF_CONNECTION,
+    CONNECTION_BLUETOOTH,
+    CONNECTION_WIFI,
+    DOMAIN,
+    LOGGER,
+    USER_SETUP_MODELS,
+    connection_for_setup_model,
+    is_bluetooth_connection,
+)
 from .coordinator import async_reconnect_soon
 
 INTERNAL_WIFI_AP_IP = "10.10.10.1"
+MANUAL_SCAN_DURATION = 15
+
+
+def _format_ble_unique_id(address: str) -> str:
+    return address.replace(":", "").replace("-", "").lower()
+
+
+def _short_address(address: str) -> str:
+    parts = address.replace("-", ":").split(":")
+    return f"{parts[-2].upper()}{parts[-1].upper()}"[-4:]
+
+
+def _name_from_discovery(discovery: MerossAdvertisement) -> str:
+    """Config entry / confirm title (no MAC suffix)."""
+    return discovery.friendly_name
+
+
+def _label_from_discovery(discovery: MerossAdvertisement) -> str:
+    """Picker label; include full address when choosing among several devices."""
+    return f"{discovery.friendly_name} ({discovery.address})"
+
+
+def _collect_discovered_service_info(
+    hass: HomeAssistant,
+) -> list[BluetoothServiceInfoBleak]:
+    seen: set[str] = set()
+    results: list[BluetoothServiceInfoBleak] = []
+    for connectable in (True, False):
+        for info in async_discovered_service_info(hass, connectable):
+            if info.address in seen:
+                continue
+            seen.add(info.address)
+            results.append(info)
+    return results
 
 
 async def async_validate_input(
@@ -62,7 +131,7 @@ async def async_validate_input(
 
 
 class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for refoss rpc."""
+    """Handle a config flow for Meross (Wi-Fi / Bluetooth)."""
 
     VERSION = 1
     MINOR_VERSION = 1
@@ -71,10 +140,72 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
     info: dict[str, Any] = {}
     device_info: dict[str, Any] = {}
 
+    def __init__(self) -> None:
+        """Initialize flow state used by Bluetooth setup."""
+        self._discovered: MerossAdvertisement | None = None
+        self._discovered_devices: dict[str, MerossAdvertisement] = {}
+        # Model chosen on the user menu (drives wifi vs ble path).
+        self._setup_model: str | None = None
+        self._setup_ble_model: MerossModel | None = None
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial step."""
+        """Ask for product model; route to Wi-Fi or Bluetooth setup."""
+        return self.async_show_menu(
+            step_id="user",
+            menu_options=list(USER_SETUP_MODELS),
+        )
+
+    async def async_step_em06p(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """User selected Wi-Fi model EM06P."""
+        return await self._async_start_model_setup("em06p")
+
+    async def async_step_em16p(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """User selected Wi-Fi model EM16P."""
+        return await self._async_start_model_setup("em16p")
+
+    async def async_step_ms120(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """User selected Bluetooth model MS120."""
+        return await self._async_start_model_setup("ms120")
+
+    async def async_step_ms220(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """User selected Bluetooth model MS220."""
+        return await self._async_start_model_setup("ms220")
+
+    async def async_step_ms420(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """User selected Bluetooth model MS420."""
+        return await self._async_start_model_setup("ms420")
+
+    async def async_step_ms700(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """User selected Bluetooth model MS700."""
+        return await self._async_start_model_setup("ms700")
+
+    async def _async_start_model_setup(self, model: str) -> ConfigFlowResult:
+        """Store selected model and continue on the matching transport."""
+        self._setup_model = model
+        connection = connection_for_setup_model(model)
+        if connection == CONNECTION_WIFI:
+            return await self.async_step_wifi()
+        self._setup_ble_model = MerossModel(model)
+        return await self.async_step_bluetooth_setup()
+
+    async def async_step_wifi(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle Wi-Fi / local network setup."""
         errors: dict[str, str] = {}
         if user_input is not None:
             host = user_input[CONF_HOST]
@@ -103,6 +234,7 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
                         return self.async_create_entry(
                             title=device_info["name"],
                             data={
+                                CONF_CONNECTION: CONNECTION_WIFI,
                                 CONF_MAC: self.info[CONF_MAC],
                                 CONF_HOST: self.host,
                                 "model": device_info["model"],
@@ -110,11 +242,14 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
                         )
                     errors["base"] = "firmware_not_fully_supported"
 
-        schema = {
-            vol.Required(CONF_HOST): str,
+        placeholders = {
+            "model": (self._setup_model or "Wi-Fi").upper(),
         }
         return self.async_show_form(
-            step_id="user", data_schema=vol.Schema(schema), errors=errors
+            step_id="wifi",
+            data_schema=vol.Schema({vol.Required(CONF_HOST): str}),
+            errors=errors,
+            description_placeholders=placeholders,
         )
 
     async def async_step_credentials(
@@ -140,6 +275,7 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
                         title=device_info["name"],
                         data={
                             **user_input,
+                            CONF_CONNECTION: CONNECTION_WIFI,
                             CONF_MAC: self.info[CONF_MAC],
                             CONF_HOST: self.host,
                             "model": device_info["model"],
@@ -248,6 +384,7 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(
                     title=self.device_info["name"],
                     data={
+                        CONF_CONNECTION: CONNECTION_WIFI,
                         CONF_MAC: self.info[CONF_MAC],
                         CONF_HOST: self.host,
                         "model": model,
@@ -308,3 +445,190 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _async_get_info(self, host: str) -> dict[str, Any]:
         """Get info from refoss device."""
         return await get_info(async_get_clientsession(self.hass), host)
+
+    # --- Bluetooth path ---
+
+    async def async_step_bluetooth(
+        self, discovery_info: BluetoothServiceInfoBleak
+    ) -> ConfigFlowResult:
+        """HA bluetooth matched manifest rules."""
+        await self.async_set_unique_id(_format_ble_unique_id(discovery_info.address))
+        self._abort_if_unique_id_configured()
+
+        parsed = parse_advertisement_data(
+            discovery_info.device, discovery_info.advertisement
+        )
+        if not parsed:
+            return self.async_abort(reason="not_supported")
+
+        self._discovered = parsed
+        self.context["title_placeholders"] = {
+            "name": parsed.friendly_name,
+            "address": _short_address(discovery_info.address),
+        }
+        return await self.async_step_bluetooth_confirm()
+
+    async def async_step_bluetooth_setup(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manual Bluetooth add after choosing a BLE product model."""
+        model_label = (
+            MODEL_FRIENDLY_NAME.get(self._setup_ble_model, self._setup_model or "BLE")
+            if self._setup_ble_model is not None
+            else (self._setup_model or "Meross BLE")
+        )
+
+        if user_input is not None:
+            address = user_input[CONF_ADDRESS]
+            discovery = self._discovered_devices[address]
+            await self.async_set_unique_id(
+                _format_ble_unique_id(address), raise_on_progress=False
+            )
+            self._abort_if_unique_id_configured()
+            self._discovered = discovery
+            return await self.async_step_bluetooth_confirm()
+
+        await bluetooth.async_request_active_scan(self.hass, MANUAL_SCAN_DURATION)
+
+        if bluetooth.async_scanner_count(self.hass, connectable=False) == 0:
+            return self.async_abort(reason="no_bluetooth_adapter")
+
+        current = self._async_current_ids(include_ignore=False)
+        for info in _collect_discovered_service_info(self.hass):
+            address = info.address
+            uid = _format_ble_unique_id(address)
+            if uid in current or address in self._discovered_devices:
+                continue
+            parsed = parse_advertisement_data(info.device, info.advertisement)
+            if not parsed:
+                continue
+            if (
+                self._setup_ble_model is not None
+                and parsed.model is not self._setup_ble_model
+            ):
+                continue
+            self._discovered_devices[address] = parsed
+
+        if not self._discovered_devices:
+            return self.async_abort(
+                reason="no_devices_found",
+                description_placeholders={"model": model_label},
+            )
+
+        if len(self._discovered_devices) == 1:
+            discovery = next(iter(self._discovered_devices.values()))
+            await self.async_set_unique_id(
+                _format_ble_unique_id(discovery.address), raise_on_progress=False
+            )
+            self._abort_if_unique_id_configured()
+            self._discovered = discovery
+            return await self.async_step_bluetooth_confirm()
+
+        return self.async_show_form(
+            step_id="bluetooth_setup",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_ADDRESS): vol.In(
+                        {
+                            address: _label_from_discovery(parsed)
+                            for address, parsed in self._discovered_devices.items()
+                        }
+                    ),
+                }
+            ),
+            description_placeholders={"model": model_label},
+        )
+
+    async def async_step_bluetooth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm Bluetooth setup; Identify only after the user accepts."""
+        assert self._discovered is not None
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                await self._async_bind_identify(self._discovered)
+            except MerossBLEError as err:
+                LOGGER.warning(
+                    "%s: Identify on bind failed: %s",
+                    self._discovered.address,
+                    err,
+                )
+                errors["base"] = "identify_failed"
+            else:
+                return self._async_create_ble_entry(self._discovered)
+
+        self._set_confirm_only()
+        return self.async_show_form(
+            step_id="bluetooth_confirm",
+            description_placeholders={
+                "name": _name_from_discovery(self._discovered),
+            },
+            errors=errors,
+        )
+
+    async def _async_bind_identify(self, discovery: MerossAdvertisement) -> None:
+        """GATT Identify once when the user confirms adding the device."""
+        ble_device = bluetooth.async_ble_device_from_address(
+            self.hass, discovery.address.upper(), connectable=True
+        )
+        if not ble_device:
+            raise MerossBLEError(
+                f"Could not find Meross BLE device with address {discovery.address}"
+            )
+        device = create_device(ble_device, discovery.model)
+        await device.identify()
+        LOGGER.info("%s: Identify sent on HA bind (user confirmed)", discovery.address)
+
+    def _async_create_ble_entry(
+        self, discovery: MerossAdvertisement
+    ) -> ConfigFlowResult:
+        return self.async_create_entry(
+            title=_name_from_discovery(discovery),
+            data={
+                CONF_CONNECTION: CONNECTION_BLUETOOTH,
+                CONF_ADDRESS: discovery.address,
+                CONF_MODEL: discovery.model.value,
+                CONF_BOUND_IDENTIFY_DONE: True,
+            },
+            options={CONF_RETRY_COUNT: DEFAULT_RETRY_COUNT},
+        )
+
+    @classmethod
+    @callback
+    def async_supports_options_flow(cls, config_entry: ConfigEntry) -> bool:
+        """Only Bluetooth entries expose an options flow."""
+        return is_bluetooth_connection(config_entry.data)
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Return options flow for BLE entries."""
+        return MerossBluetoothOptionsFlow()
+
+
+class MerossBluetoothOptionsFlow(OptionsFlow):
+    """Options: GATT connection retry count."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        model = self.config_entry.data.get(CONF_MODEL, MerossModel.MS120)
+        options = self.config_entry.options
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_RETRY_COUNT,
+                        default=options.get(CONF_RETRY_COUNT, DEFAULT_RETRY_COUNT),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
+                }
+            ),
+            description_placeholders={
+                "model": MODEL_FRIENDLY_NAME.get(MerossModel(model), str(model)),
+            },
+        )

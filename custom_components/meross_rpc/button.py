@@ -84,6 +84,14 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set buttons for device."""
+    from .const import is_bluetooth_connection
+
+    if is_bluetooth_connection(config_entry.data):
+        from .ble.button import async_setup_entry as async_setup_ble_entry
+
+        await async_setup_ble_entry(hass, config_entry, async_add_entities)
+        return
+
     entry_data = config_entry.runtime_data
     coordinator: RefossCoordinator | None
     coordinator = entry_data.coordinator

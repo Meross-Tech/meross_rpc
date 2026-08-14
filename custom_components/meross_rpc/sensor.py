@@ -310,6 +310,14 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up sensors for device."""
+    from .const import is_bluetooth_connection
+
+    if is_bluetooth_connection(config_entry.data):
+        from .ble.sensor import async_setup_entry as async_setup_ble_entry
+
+        await async_setup_ble_entry(hass, config_entry, async_add_entities)
+        return
+
     coordinator = config_entry.runtime_data.coordinator
     assert coordinator
 

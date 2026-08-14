@@ -1,4 +1,4 @@
-"""The Refoss RPC integration."""
+"""The Meross integration (Wi-Fi RPC / Bluetooth)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from aiorefoss.exceptions import (
 )
 from aiorefoss.rpc_device import RpcDevice
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_HOST,
     CONF_MAC,
@@ -27,6 +28,8 @@ from homeassistant.exceptions import (
 )
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .ble import async_setup_bluetooth_entry, async_unload_bluetooth_entry
+from .const import is_bluetooth_connection
 from .coordinator import RefossConfigEntry, RefossCoordinator, RefossEntryData
 
 PLATFORMS: Final = [
@@ -40,8 +43,15 @@ PLATFORMS: Final = [
 ]
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: RefossConfigEntry) -> bool:
-    """Set up Refoss RPC from a config entry."""
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up Meross from a config entry (Wi-Fi or Bluetooth)."""
+    if is_bluetooth_connection(entry.data):
+        return await async_setup_bluetooth_entry(hass, entry)
+    return await _async_setup_wifi_entry(hass, entry)
+
+
+async def _async_setup_wifi_entry(hass: HomeAssistant, entry: RefossConfigEntry) -> bool:
+    """Set up Meross Wi-Fi RPC from a config entry."""
     if not entry.data.get(CONF_HOST):
         raise ConfigEntryError("Invalid Host, please try again")
 
@@ -74,11 +84,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: RefossConfigEntry) -> bo
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: RefossConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    if is_bluetooth_connection(entry.data):
+        return await async_unload_bluetooth_entry(hass, entry)
 
     runtime_data = entry.runtime_data
-
     if runtime_data.coordinator:
         await runtime_data.coordinator.shutdown()
 

@@ -2,12 +2,38 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from logging import Logger, getLogger
 from typing import Final
 
 DOMAIN: Final = "meross_rpc"
 
 LOGGER: Logger = getLogger(__package__)
+
+# How the device is reached; missing key means legacy Wi-Fi entries.
+CONF_CONNECTION: Final = "connection"
+CONNECTION_WIFI: Final = "wifi"
+CONNECTION_BLUETOOTH: Final = "bluetooth"
+
+# User config-flow menu: model key → connection type (internal routing).
+WIFI_SETUP_MODELS: Final = ("em06p", "em16p")
+BLUETOOTH_SETUP_MODELS: Final = ("ms120", "ms220", "ms420", "ms700")
+USER_SETUP_MODELS: Final = (*WIFI_SETUP_MODELS, *BLUETOOTH_SETUP_MODELS)
+
+
+def is_bluetooth_connection(data: Mapping[str, object]) -> bool:
+    """Return True when the config entry (or candidate data) is BLE."""
+    return data.get(CONF_CONNECTION) == CONNECTION_BLUETOOTH
+
+
+def connection_for_setup_model(model: str) -> str:
+    """Map a user-selected product model to wifi or bluetooth setup."""
+    if model in WIFI_SETUP_MODELS:
+        return CONNECTION_WIFI
+    if model in BLUETOOTH_SETUP_MODELS:
+        return CONNECTION_BLUETOOTH
+    raise ValueError(f"Unsupported setup model: {model}")
+
 
 # Check interval for  devices
 REFOSS_CHECK_INTERVAL = 60
