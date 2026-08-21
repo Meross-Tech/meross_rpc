@@ -117,9 +117,6 @@
   },
   "entity": {
     "sensor": {
-      "bluetooth_signal": {
-        "name": "Bluetooth signal"
-      },
       "dew_point": {
         "name": "Dew point"
       },

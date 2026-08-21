@@ -34,16 +34,20 @@ def _async_ble_gatt_lock(hass: HomeAssistant) -> asyncio.Lock:
     return lock
 
 
-def _async_remove_legacy_identify_button(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Drop the retired Identify button entity if it still exists."""
+def _async_remove_legacy_ble_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Drop retired BLE entities (Identify button, Bluetooth signal)."""
     if entry.unique_id is None:
         return
     registry = er.async_get(hass)
-    entity_id = registry.async_get_entity_id(
-        Platform.BUTTON, entry.domain, f"{entry.unique_id}-identify"
-    )
-    if entity_id is not None:
-        registry.async_remove(entity_id)
+    for domain, unique_suffix in (
+        (Platform.BUTTON, "identify"),
+        (Platform.SENSOR, "rssi"),
+    ):
+        entity_id = registry.async_get_entity_id(
+            domain, entry.domain, f"{entry.unique_id}-{unique_suffix}"
+        )
+        if entity_id is not None:
+            registry.async_remove(entity_id)
 
 
 PLATFORMS_BY_MODEL: dict[MerossModel, list[Platform]] = {
@@ -114,7 +118,7 @@ async def async_setup_bluetooth_entry(
     await hass.config_entries.async_forward_entry_setups(
         entry, PLATFORMS_BY_MODEL[model]
     )
-    _async_remove_legacy_identify_button(hass, entry)
+    _async_remove_legacy_ble_entities(hass, entry)
     if model is MerossModel.MS120:
         # Setup / reload: ask firmware for anything newer than last import.
         coordinator.history_force_full_resync = True
