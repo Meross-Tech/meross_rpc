@@ -20,6 +20,7 @@ from .const import (
     ADVERTISEMENT_STALE_SECONDS,
     CONNECTABLE_MODELS,
     DEVICE_STARTUP_TIMEOUT,
+    GATT_ADV_WAIT_TIMEOUT,
     MerossModel,
 )
 from .device import MerossBLEDevice
@@ -87,6 +88,27 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         # Instantaneous events from the latest advertisement (after dedup)
         self.last_new_events: list[tuple[int, int]] = []
         self._stale_unsub: CALLBACK_TYPE | None = None
+        self._adv_waiters: list[asyncio.Event] = []
+
+    @callback
+    def _async_notify_advertisement_waiters(self) -> None:
+        for event in self._adv_waiters:
+            event.set()
+
+    async def async_wait_next_advertisement(
+        self, timeout: float = GATT_ADV_WAIT_TIMEOUT
+    ) -> bool:
+        """Wait until the next parseable advertisement for this device."""
+        event = asyncio.Event()
+        self._adv_waiters.append(event)
+        try:
+            async with asyncio.timeout(timeout):
+                await event.wait()
+            return True
+        except TimeoutError:
+            return False
+        finally:
+            self._adv_waiters.remove(event)
 
     @callback
     def _async_cancel_stale_timer(self) -> None:
@@ -242,19 +264,27 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
             )
         self._ready_event.set()
         self._async_schedule_stale_timer()
+        self._async_notify_advertisement_waiters()
         changed = self.device.advertisement_changed(adv)
         new_events = self.device.update_from_advertisement(adv)
         self.last_new_events = new_events
         recovered = self._was_unavailable or not self.available
-        if not changed and not new_events and not recovered:
+        if recovered:
+            _LOGGER.info(
+                "%s: %s recovered from unavailable (changed=%s events=%s)",
+                adv.address,
+                self.model.value.upper(),
+                changed,
+                new_events,
+            )
+            self._was_unavailable = False
+        elif not changed and not new_events:
             _LOGGER.info(
                 "%s: %s BLE packet unchanged (no entity update)",
                 adv.address,
                 self.model.value.upper(),
             )
-            return
-        self._was_unavailable = False
-        if new_events:
+        elif new_events:
             _LOGGER.info(
                 "%s: Meross BLE events=%s data_keys=%s",
                 self.ble_device.address,
@@ -268,6 +298,8 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
                 adv.data,
                 new_events,
             )
+        # Always notify entities so availability recovers after the stale timer
+        # even when broadcast payload is unchanged.
         super()._async_handle_bluetooth_event(service_info, change)
         if recovered and self.model is MerossModel.MS120:
             _LOGGER.info(

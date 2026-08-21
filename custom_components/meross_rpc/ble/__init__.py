@@ -2,21 +2,36 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
+from ..const import DOMAIN
 from .const import (
     CONF_MODEL,
     CONF_RETRY_COUNT,
+    DATA_BLE_GATT_LOCK,
     DEFAULT_RETRY_COUNT,
     LOGGER,
     MerossModel,
 )
 from .coordinator import MerossBLEDataUpdateCoordinator
 from .device import create_device
+
+
+def _async_ble_gatt_lock(hass: HomeAssistant) -> asyncio.Lock:
+    """One shared GATT lock for all Meross BLE devices on this HA instance."""
+    store = hass.data.setdefault(DOMAIN, {})
+    lock = store.get(DATA_BLE_GATT_LOCK)
+    if lock is None:
+        lock = asyncio.Lock()
+        store[DATA_BLE_GATT_LOCK] = lock
+    return lock
+
 
 PLATFORMS_BY_MODEL: dict[MerossModel, list[Platform]] = {
     MerossModel.MS120: [
@@ -73,6 +88,12 @@ async def async_setup_bluetooth_entry(
         connectable,
         model,
         entry,
+    )
+    device.bind_runtime(
+        hass,
+        connectable=connectable,
+        gatt_lock=_async_ble_gatt_lock(hass),
+        wait_advertisement=coordinator.async_wait_next_advertisement,
     )
     entry.async_on_unload(coordinator.async_start())
     if not await coordinator.async_wait_ready():
