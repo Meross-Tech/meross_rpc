@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import entity_registry as er
 
 from ..const import DOMAIN
 from .const import (
@@ -33,28 +34,36 @@ def _async_ble_gatt_lock(hass: HomeAssistant) -> asyncio.Lock:
     return lock
 
 
+def _async_remove_legacy_identify_button(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Drop the retired Identify button entity if it still exists."""
+    if entry.unique_id is None:
+        return
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(
+        Platform.BUTTON, entry.domain, f"{entry.unique_id}-identify"
+    )
+    if entity_id is not None:
+        registry.async_remove(entity_id)
+
+
 PLATFORMS_BY_MODEL: dict[MerossModel, list[Platform]] = {
     MerossModel.MS120: [
         Platform.SENSOR,
         Platform.BINARY_SENSOR,
-        Platform.BUTTON,
     ],
     MerossModel.MS220: [
         Platform.BINARY_SENSOR,
         Platform.SENSOR,
         Platform.EVENT,
-        Platform.BUTTON,
     ],
     MerossModel.MS420: [
         Platform.BINARY_SENSOR,
         Platform.SENSOR,
-        Platform.BUTTON,
     ],
     MerossModel.MS700: [
         Platform.SENSOR,
         Platform.BINARY_SENSOR,
         Platform.EVENT,
-        Platform.BUTTON,
     ],
 }
 
@@ -105,6 +114,7 @@ async def async_setup_bluetooth_entry(
     await hass.config_entries.async_forward_entry_setups(
         entry, PLATFORMS_BY_MODEL[model]
     )
+    _async_remove_legacy_identify_button(hass, entry)
     if model is MerossModel.MS120:
         # Setup / reload: ask firmware for anything newer than last import.
         coordinator.history_force_full_resync = True

@@ -87,9 +87,7 @@ async def async_setup_entry(
     from .const import is_bluetooth_connection
 
     if is_bluetooth_connection(config_entry.data):
-        from .ble.button import async_setup_entry as async_setup_ble_entry
-
-        await async_setup_ble_entry(hass, config_entry, async_add_entities)
+        # BLE Identify button was removed; Wi-Fi buttons only.
         return
 
     entry_data = config_entry.runtime_data
