@@ -154,6 +154,9 @@
       },
       "rain_detected": {
         "name": "Rain detected"
+      },
+      "freeze_alarm": {
+        "name": "Freeze alarm"
       }
     },
     "event": {

@@ -253,13 +253,14 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         elif self.model is MerossModel.MS420:
             _LOGGER.info(
                 "%s: MS420 BLE packet parsed status=%#x alarm=%#x battery=%s "
-                "water_leak=%s rain=%s events=%s",
+                "water_leak=%s rain=%s freeze=%s events=%s",
                 adv.address,
                 adv.data.get("status", 0),
                 adv.data.get("alarm_status", 0),
                 adv.data.get("battery"),
                 adv.data.get("water_leak"),
                 adv.data.get("rain_detected"),
+                adv.data.get("freeze_alarm"),
                 adv.events,
             )
         self._ready_event.set()

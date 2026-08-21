@@ -66,7 +66,7 @@ MS220_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
     ),
 )
 
-# ms420.md status: bit0 rain/droplet, bit1 standing water.
+# ms420.md status: bit0 rain/droplet, bit1 standing water, bit2 freeze risk.
 MS420_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
     MerossBLEBinarySensorEntityDescription(
         key="water_leak",
@@ -79,6 +79,12 @@ MS420_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
         translation_key="rain_detected",
         device_class=BinarySensorDeviceClass.MOISTURE,
         value_key="rain_detected",
+    ),
+    MerossBLEBinarySensorEntityDescription(
+        key="freeze_alarm",
+        translation_key="freeze_alarm",
+        device_class=BinarySensorDeviceClass.COLD,
+        value_key="freeze_alarm",
     ),
 )
 

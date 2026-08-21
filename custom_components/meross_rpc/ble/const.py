@@ -119,9 +119,10 @@ MS220_EVENT_DOORBELL = 0x06
 MS220_EVENT_BUTTON_SINGLE = 0x07
 MS220_EVENT_BUTTON_DOUBLE = 0x08
 
-# MS420 status bits (ms420.md) — water leak / rain
+# MS420 status bits (ms420.md) — rain / water leak / freeze
 MS420_STATUS_RAIN = 0x01  # top droplet / rain
 MS420_STATUS_WATER_LEAK = 0x02  # bottom standing water / level
+MS420_STATUS_FREEZE = 0x04  # low temperature / freeze risk
 
 # MS700: report_event packs screen (1–3) + button (1–3) → logical buttons 1–9
 MS700_BUTTON_COUNT = 9
