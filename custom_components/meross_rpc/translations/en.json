@@ -183,7 +183,6 @@
         }
       },
       "ms700_button": {
-        "name": "Button {number}",
         "state_attributes": {
           "event_type": {
             "state": {

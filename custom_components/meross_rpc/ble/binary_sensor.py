@@ -9,8 +9,9 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
     BinarySensorEntityDescription,
 )
-from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EntityCategory, Platform
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import BATTERY_LOW_THRESHOLD, MerossModel
@@ -37,7 +38,7 @@ COMMON_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
     ),
 )
 
-MS220_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
+MS220_CORE_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
     MerossBLEBinarySensorEntityDescription(
         key="opening",
         translation_key="opening",
@@ -50,6 +51,11 @@ MS220_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
         device_class=BinarySensorDeviceClass.VIBRATION,
         value_key="vibration",
     ),
+)
+
+# Long door open/closed alarms are optional Meross-app features. BLE has no
+# separate "enabled" flag, so only create entities once the alarm bit is seen.
+MS220_OPTIONAL_ALARM_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
     MerossBLEBinarySensorEntityDescription(
         key="alarm_door_open_long",
         translation_key="alarm_door_open_long",
@@ -92,7 +98,7 @@ BINARY_SENSORS_BY_MODEL: dict[
     MerossModel, tuple[MerossBLEBinarySensorEntityDescription, ...]
 ] = {
     MerossModel.MS120: COMMON_BINARY_SENSORS,
-    MerossModel.MS220: (*COMMON_BINARY_SENSORS, *MS220_BINARY_SENSORS),
+    MerossModel.MS220: (*COMMON_BINARY_SENSORS, *MS220_CORE_BINARY_SENSORS),
     MerossModel.MS420: (*COMMON_BINARY_SENSORS, *MS420_BINARY_SENSORS),
     MerossModel.MS700: COMMON_BINARY_SENSORS,
 }
@@ -111,6 +117,41 @@ async def async_setup_entry(
     ]
     entities.append(MerossBLEConnectivitySensor(coordinator))
     async_add_entities(entities)
+
+    if coordinator.model is not MerossModel.MS220:
+        return
+
+    registry = er.async_get(hass)
+    added_alarms: set[str] = set()
+    for description in MS220_OPTIONAL_ALARM_SENSORS:
+        unique_id = f"{coordinator.base_unique_id}-{description.key}"
+        entity_id = registry.async_get_entity_id(
+            Platform.BINARY_SENSOR, entry.domain, unique_id
+        )
+        if entity_id is None:
+            continue
+        # Keep only while the alarm bit is active; otherwise remove so the
+        # device page stays clean until the Meross-app feature trips it.
+        if coordinator.device.data.get(description.value_key) is True:
+            added_alarms.add(description.key)
+        else:
+            registry.async_remove(entity_id)
+
+    @callback
+    def _sync_ms220_optional_alarms() -> None:
+        to_add: list[MerossBLEBinarySensor] = []
+        for description in MS220_OPTIONAL_ALARM_SENSORS:
+            if description.key in added_alarms:
+                continue
+            if coordinator.device.data.get(description.value_key) is not True:
+                continue
+            to_add.append(MerossBLEBinarySensor(coordinator, description))
+            added_alarms.add(description.key)
+        if to_add:
+            async_add_entities(to_add)
+
+    entry.async_on_unload(coordinator.async_add_listener(_sync_ms220_optional_alarms))
+    _sync_ms220_optional_alarms()
 
 
 class MerossBLEBinarySensor(MerossBLEEntity, BinarySensorEntity):

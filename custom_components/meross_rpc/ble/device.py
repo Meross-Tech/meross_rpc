@@ -264,19 +264,14 @@ class MerossBLEDevice:
             if self._last_accepted_req_id is not None:
                 accept_gap = (req_id - self._last_accepted_req_id) & 0xFF
                 if accept_gap == 0 or accept_gap > 128:
-                    if (
-                        self.model is MerossModel.MS700
-                        and accept_gap == 0
-                        and self._stale_event_logged_for != req_id
-                    ):
+                    if accept_gap == 0 and self._stale_event_logged_for != req_id:
                         self._stale_event_logged_for = req_id
                         _LOGGER.info(
-                            "%s: MS700 sticky/rebroadcast req_id=%s event=%#x "
-                            "(logical=%s) — ignoring until req_id advances",
+                            "%s: sticky/rebroadcast req_id=%s event=%#x "
+                            "— ignoring until req_id advances (UI time won't update)",
                             self.address,
                             req_id,
                             event_code,
-                            logical,
                         )
                     continue
 
@@ -289,6 +284,13 @@ class MerossBLEDevice:
                     "(req_id=%s event=%#x)",
                     self.address,
                     logical,
+                    req_id,
+                    event_code,
+                )
+            else:
+                _LOGGER.info(
+                    "%s: ACCEPT event req_id=%s event=%#x",
+                    self.address,
                     req_id,
                     event_code,
                 )

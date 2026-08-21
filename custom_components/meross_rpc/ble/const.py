@@ -148,6 +148,19 @@ def ms700_screen_for_button(button_number: int) -> int:
     return (button_number - 1) // MS700_BUTTONS_PER_SCREEN + 1
 
 
+def ms700_button_on_screen(button_number: int) -> int:
+    """Logical button 1–9 → button index on its screen (1–3)."""
+    return (button_number - 1) % MS700_BUTTONS_PER_SCREEN + 1
+
+
+def ms700_default_button_name(button_number: int) -> str:
+    """Fallback name when the device/app has not set a custom label."""
+    return (
+        f"screen{ms700_screen_for_button(button_number)}"
+        f"-button{ms700_button_on_screen(button_number)}"
+    )
+
+
 def ms700_button_enabled(button_number: int, screen_enable: int) -> bool:
     """Whether logical button is on an enabled screen (ms700.md screen_enable)."""
     screen_id = ms700_screen_for_button(button_number)
