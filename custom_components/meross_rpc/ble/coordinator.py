@@ -168,10 +168,18 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
     def _async_handle_unavailable(
         self, service_info: bluetooth.BluetoothServiceInfoBleak
     ) -> None:
-        self._async_cancel_stale_timer()
-        super()._async_handle_unavailable(service_info)
-        self._was_unavailable = True
-        _LOGGER.info("Device %s is unavailable", self.device_name)
+        # Meross battery devices often pause ads for 30s–60s when state is
+        # unchanged. HA's async_track_unavailable (~30s) is too aggressive and
+        # would cancel our 195s stale timer. Keep last name only; offline is
+        # decided exclusively by _async_advertisement_stale.
+        self._last_name = service_info.name
+        _LOGGER.debug(
+            "%s: HA bluetooth reported unavailable for %s "
+            "(ignored; offline after %ss without ads)",
+            self.address,
+            self.device_name,
+            ADVERTISEMENT_STALE_SECONDS,
+        )
 
     @callback
     def _async_stop(self) -> None:
