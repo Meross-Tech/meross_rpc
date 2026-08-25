@@ -24,6 +24,7 @@ from .const import (
     MS700_BUTTON_COUNT,
     MerossModel,
     ms700_button_enabled,
+    ms700_default_button_name,
     ms700_logical_button,
 )
 from .coordinator import MerossBLEConfigEntry, MerossBLEDataUpdateCoordinator
@@ -48,43 +49,65 @@ async def async_setup_entry(
         )
         return
     if coordinator.model == MerossModel.MS700:
-        async_add_entities(
-            [
-                MerossBLEMS700ButtonEventEntity(coordinator, button_number)
-                for button_number in range(1, MS700_BUTTON_COUNT + 1)
-            ]
-        )
+        # Only create entities for screens enabled in the Meross app
+        # (product_data.screen_enable). Disabled screens are removed from the
+        # registry so they do not appear as grayed-out / "+N disabled" rows.
+        # Until product_data arrives, assume only screen 1 (three buttons).
+        added_buttons: set[int] = set()
 
         @callback
         def _sync_ms700_button_entities() -> None:
-            """Enable/disable button entities from product_data screen_enable."""
             screen_enable = coordinator.device.data.get("screen_enable")
             if screen_enable is None:
-                return
+                screen_enable = 0x01
             registry = er.async_get(hass)
             domain = entry.domain
+            to_add: list[MerossBLEMS700ButtonEventEntity] = []
             for button_number in range(1, MS700_BUTTON_COUNT + 1):
                 unique_id = f"{coordinator.base_unique_id}-button-{button_number}"
                 entity_id = registry.async_get_entity_id(
                     Platform.EVENT, domain, unique_id
                 )
-                if entity_id is None:
-                    continue
-                reg_entry = registry.async_get(entity_id)
-                if reg_entry is None:
-                    continue
-                want_enabled = ms700_button_enabled(button_number, screen_enable)
-                if want_enabled:
-                    if reg_entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION:
-                        registry.async_update_entity(entity_id, disabled_by=None)
-                elif reg_entry.disabled_by is None:
-                    registry.async_update_entity(
-                        entity_id,
-                        disabled_by=er.RegistryEntryDisabler.INTEGRATION,
-                    )
+                label = _ms700_button_label(coordinator, button_number)
+                want = ms700_button_enabled(button_number, screen_enable)
+                if want:
+                    if entity_id is None and button_number not in added_buttons:
+                        to_add.append(
+                            MerossBLEMS700ButtonEventEntity(
+                                coordinator, button_number, label
+                            )
+                        )
+                        added_buttons.add(button_number)
+                    elif entity_id is not None:
+                        # Clear legacy integration-disable and migrate name.
+                        registry.async_update_entity(
+                            entity_id,
+                            disabled_by=None,
+                            name=label,
+                        )
+                        added_buttons.add(button_number)
+                elif entity_id is not None:
+                    registry.async_remove(entity_id)
+                    added_buttons.discard(button_number)
+            if to_add:
+                async_add_entities(to_add)
 
-        entry.async_on_unload(coordinator.async_add_listener(_sync_ms700_button_entities))
+        entry.async_on_unload(
+            coordinator.async_add_listener(_sync_ms700_button_entities)
+        )
         _sync_ms700_button_entities()
+
+
+def _ms700_button_label(
+    coordinator: MerossBLEDataUpdateCoordinator, button_number: int
+) -> str:
+    """Prefer a device/app custom name when present; else screenN-buttonM."""
+    names = coordinator.device.data.get("button_names")
+    if isinstance(names, dict):
+        custom = names.get(button_number) or names.get(str(button_number))
+        if isinstance(custom, str) and custom.strip():
+            return custom.strip()
+    return ms700_default_button_name(button_number)
 
 
 class _MerossBLEEventEntity(MerossBLEEntity, EventEntity):
@@ -125,8 +148,13 @@ class MerossBLEMS220ButtonEventEntity(_MerossBLEEventEntity):
         super()._handle_coordinator_update()
 
 
-class MerossBLEMS220DoorbellEventEntity(_MerossBLEEventEntity):
-    """Doorbell mode ring events (report_event 0x06)."""
+class MerossBLEMS220DoorbellEventEntity(MerossBLEEntity, EventEntity):
+    """Doorbell mode ring events (report_event 0x06).
+
+    Restore the last ring timestamp so the UI is not Unknown after restart.
+    Unlike buttons, a restored doorbell state is not treated as a new ring
+    (no _trigger_event on restore).
+    """
 
     _attr_translation_key = "doorbell"
     _attr_device_class = EventDeviceClass.DOORBELL
@@ -143,33 +171,30 @@ class MerossBLEMS220DoorbellEventEntity(_MerossBLEEventEntity):
                 self._trigger_event(DoorbellEventType.RING)
         super()._handle_coordinator_update()
 
-
 class MerossBLEMS700ButtonEventEntity(_MerossBLEEventEntity):
     """One of nine MS700 screen buttons; single click → press_end (ms700.md)."""
 
-    _attr_translation_key = "ms700_button"
     _attr_device_class = EventDeviceClass.BUTTON
     _attr_event_types = [ButtonEventType.PRESS_END]
 
     def __init__(
-        self, coordinator: MerossBLEDataUpdateCoordinator, button_number: int
+        self,
+        coordinator: MerossBLEDataUpdateCoordinator,
+        button_number: int,
+        name: str,
     ) -> None:
         super().__init__(coordinator)
         self._button_number = button_number
         self._attr_unique_id = f"{coordinator.base_unique_id}-button-{button_number}"
-        self._attr_translation_placeholders = {"number": str(button_number)}
-
-    @property
-    def available(self) -> bool:
-        if not super().available:
-            return False
-        screen_enable = self.parsed_data.get("screen_enable")
-        if screen_enable is None:
-            return True
-        return ms700_button_enabled(self._button_number, screen_enable)
+        self._attr_translation_key = "ms700_button"
+        self._attr_name = name
 
     @callback
     def _handle_coordinator_update(self) -> None:
+        # Refresh label if the device later provides custom button names.
+        label = _ms700_button_label(self.coordinator, self._button_number)
+        if label != self._attr_name:
+            self._attr_name = label
         screen_enable = self.parsed_data.get("screen_enable")
         for req_id, event_code in self.coordinator.last_new_events:
             logical = ms700_logical_button(event_code)
@@ -186,9 +211,9 @@ class MerossBLEMS700ButtonEventEntity(_MerossBLEEventEntity):
                 )
                 continue
             _LOGGER.info(
-                "%s: MS700 entity Button %s fired press_end (req_id=%s)",
+                "%s: MS700 entity %s fired press_end (req_id=%s)",
                 self.coordinator.ble_device.address,
-                self._button_number,
+                self._attr_name,
                 req_id,
             )
             self._trigger_event(ButtonEventType.PRESS_END)

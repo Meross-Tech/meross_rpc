@@ -117,9 +117,6 @@
   },
   "entity": {
     "sensor": {
-      "bluetooth_signal": {
-        "name": "Bluetooth signal"
-      },
       "dew_point": {
         "name": "Dew point"
       },
@@ -154,6 +151,9 @@
       },
       "rain_detected": {
         "name": "Rain detected"
+      },
+      "freeze_alarm": {
+        "name": "Freeze alarm"
       }
     },
     "event": {
@@ -183,7 +183,6 @@
         }
       },
       "ms700_button": {
-        "name": "Button {number}",
         "state_attributes": {
           "event_type": {
             "state": {
@@ -201,11 +200,6 @@
             }
           }
         }
-      }
-    },
-    "button": {
-      "identify": {
-        "name": "Identify"
       }
     }
   }

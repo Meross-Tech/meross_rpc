@@ -19,6 +19,16 @@ DEVICE_STARTUP_TIMEOUT = 30
 # Needed on macOS where Bleak's discovered cache often never expires, so HA's
 # async_track_unavailable may never fire after battery removal / BT off.
 ADVERTISEMENT_STALE_SECONDS = 195
+# Shared across all Meross BLE entries: Pi/USB adapters often have 1 connection slot.
+DATA_BLE_GATT_LOCK = "ble_gatt_lock"
+# After a failed GATT attempt, wait for the next advertisement before retrying
+# (device is more likely connectable right after it wakes to advertise).
+# Idle ads are often ~30s apart; keep the wait below a full minute for UI feel.
+GATT_ADV_WAIT_TIMEOUT = 35.0
+# If we heard the device this recently, skip waiting and connect immediately.
+GATT_FRESH_ADV_SECONDS = 5.0
+# BlueZ needs a moment to clear InProgress / free the slot before another connect.
+GATT_INPROGRESS_COOLDOWN = 2.0
 
 # ---------------------------------------------------------------------------
 # Discovery / advertisement (ble_ha.md)
@@ -109,9 +119,10 @@ MS220_EVENT_DOORBELL = 0x06
 MS220_EVENT_BUTTON_SINGLE = 0x07
 MS220_EVENT_BUTTON_DOUBLE = 0x08
 
-# MS420 status bits (ms420.md) — water leak / rain
+# MS420 status bits (ms420.md) — rain / water leak / freeze
 MS420_STATUS_RAIN = 0x01  # top droplet / rain
 MS420_STATUS_WATER_LEAK = 0x02  # bottom standing water / level
+MS420_STATUS_FREEZE = 0x04  # low temperature / freeze risk
 
 # MS700: report_event packs screen (1–3) + button (1–3) → logical buttons 1–9
 MS700_BUTTON_COUNT = 9
@@ -135,6 +146,19 @@ def ms700_logical_button(event_code: int) -> int | None:
 def ms700_screen_for_button(button_number: int) -> int:
     """Logical button 1–9 → screen_id 1–3."""
     return (button_number - 1) // MS700_BUTTONS_PER_SCREEN + 1
+
+
+def ms700_button_on_screen(button_number: int) -> int:
+    """Logical button 1–9 → button index on its screen (1–3)."""
+    return (button_number - 1) % MS700_BUTTONS_PER_SCREEN + 1
+
+
+def ms700_default_button_name(button_number: int) -> str:
+    """Fallback name when the device/app has not set a custom label."""
+    return (
+        f"screen{ms700_screen_for_button(button_number)}"
+        f"-button{ms700_button_on_screen(button_number)}"
+    )
 
 
 def ms700_button_enabled(button_number: int, screen_enable: int) -> bool:

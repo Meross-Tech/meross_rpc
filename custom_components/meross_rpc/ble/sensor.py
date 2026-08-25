@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from homeassistant.components.bluetooth import async_last_service_info
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -13,7 +12,6 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import (
     PERCENTAGE,
-    SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     EntityCategory,
     UnitOfDensity,
     UnitOfPressure,
@@ -56,15 +54,6 @@ class MerossBLESensorEntityDescription(SensorEntityDescription):
 
 
 SENSOR_TYPES: dict[str, MerossBLESensorEntityDescription] = {
-    "rssi": MerossBLESensorEntityDescription(
-        key="rssi",
-        translation_key="bluetooth_signal",
-        native_unit_of_measurement=SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
-        device_class=SensorDeviceClass.SIGNAL_STRENGTH,
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_registry_enabled_default=False,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
     "battery": MerossBLESensorEntityDescription(
         key="battery",
         native_unit_of_measurement=PERCENTAGE,
@@ -115,11 +104,9 @@ async def async_setup_entry(
 ) -> None:
     coordinator = entry.runtime_data
     keys = SENSORS_BY_MODEL.get(coordinator.model, ("battery",))
-    entities: list[SensorEntity] = [
+    async_add_entities(
         MerossBLESensor(coordinator, key) for key in keys if key in SENSOR_TYPES
-    ]
-    entities.append(MerossBLERSSISensor(coordinator))
-    async_add_entities(entities)
+    )
 
 
 class MerossBLESensor(MerossBLEEntity, SensorEntity):
@@ -138,17 +125,4 @@ class MerossBLESensor(MerossBLEEntity, SensorEntity):
         value = self.parsed_data.get(self._sensor)
         if isinstance(value, (int, float)):
             return value
-        return None
-
-
-class MerossBLERSSISensor(MerossBLESensor):
-    def __init__(self, coordinator: MerossBLEDataUpdateCoordinator) -> None:
-        super().__init__(coordinator, "rssi")
-
-    @property
-    def native_value(self) -> int | None:
-        if service_info := async_last_service_info(
-            self.hass, self._address, self.coordinator.connectable
-        ):
-            return service_info.rssi
         return None

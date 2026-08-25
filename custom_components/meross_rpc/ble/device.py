@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from bleak.backends.device import BLEDevice
@@ -13,9 +14,14 @@ from bleak_retry_connector import (
     BleakClientWithServiceCache,
     establish_connection,
 )
+from homeassistant.components import bluetooth
+from homeassistant.core import HomeAssistant
 
 from .const import (
     DEFAULT_RETRY_COUNT,
+    GATT_ADV_WAIT_TIMEOUT,
+    GATT_FRESH_ADV_SECONDS,
+    GATT_INPROGRESS_COOLDOWN,
     HISTORY_PAGE_SIZE,
     MEROSS_CHAR_NOTIFY,
     MEROSS_CHAR_WRITE,
@@ -72,6 +78,25 @@ class MerossBLEDevice:
         # First event-carrying adv after process start is often a sticky
         # rebroadcast from before HA restarted — sync req_id, do not fire.
         self._event_req_id_bootstrapped = False
+        self._hass: HomeAssistant | None = None
+        self._connectable = True
+        self._gatt_lock: asyncio.Lock | None = None
+        self._wait_advertisement: Callable[[float], Awaitable[bool]] | None = None
+        self._last_adv_monotonic: float | None = None
+
+    def bind_runtime(
+        self,
+        hass: HomeAssistant,
+        *,
+        connectable: bool,
+        gatt_lock: asyncio.Lock,
+        wait_advertisement: Callable[[float], Awaitable[bool]],
+    ) -> None:
+        """Attach HA runtime helpers used for GATT (shared slot + adv window)."""
+        self._hass = hass
+        self._connectable = connectable
+        self._gatt_lock = gatt_lock
+        self._wait_advertisement = wait_advertisement
 
     @property
     def address(self) -> str:
@@ -96,6 +121,64 @@ class MerossBLEDevice:
     def update_ble_device(self, device: BLEDevice) -> None:
         self._device = device
 
+    def _async_refresh_ble_device(self) -> None:
+        """Prefer the freshest connectable BLEDevice from HA's bluetooth cache."""
+        if self._hass is None:
+            return
+        ble_device = bluetooth.async_ble_device_from_address(
+            self._hass, self.address.upper(), self._connectable
+        )
+        if ble_device is not None:
+            self._device = ble_device
+
+    @staticmethod
+    def _is_slot_or_inprogress_error(err: BaseException) -> bool:
+        text = str(err)
+        return (
+            "InProgress" in text
+            or "connection slot" in text.lower()
+            or "out of connection slots" in text.lower()
+        )
+
+    def _adv_is_fresh(self) -> bool:
+        if self._last_adv_monotonic is None:
+            return False
+        return (time.monotonic() - self._last_adv_monotonic) <= GATT_FRESH_ADV_SECONDS
+
+    async def _async_wait_for_connect_window(self, *, reason: str) -> None:
+        """Wait for a fresh advertisement unless one was just received."""
+        if self._wait_advertisement is None:
+            return
+        if self._adv_is_fresh():
+            _LOGGER.info(
+                "%s: %s — recent advertisement (≤%.0fs), connecting immediately",
+                self.address,
+                reason,
+                GATT_FRESH_ADV_SECONDS,
+            )
+            return
+        _LOGGER.info(
+            "%s: %s — waiting up to %.0fs for next advertisement",
+            self.address,
+            reason,
+            GATT_ADV_WAIT_TIMEOUT,
+        )
+        if not await self._wait_advertisement(GATT_ADV_WAIT_TIMEOUT):
+            _LOGGER.warning(
+                "%s: %s — no advertisement within %.0fs; trying cached BLEDevice",
+                self.address,
+                reason,
+                GATT_ADV_WAIT_TIMEOUT,
+            )
+
+    async def _async_prepare_gatt_attempt(self, attempt: int) -> None:
+        """Align retries with the device's advertise/connectable window."""
+        if attempt > 1:
+            await self._async_wait_for_connect_window(
+                reason=f"GATT retry {attempt}/{self.retry_count}"
+            )
+        self._async_refresh_ble_device()
+
     def advertisement_changed(self, adv: MerossAdvertisement) -> bool:
         if self._last_adv is None:
             return True
@@ -110,6 +193,7 @@ class MerossBLEDevice:
         """Apply ad state; return new (non-duplicate) instantaneous events."""
         self._device = adv.device
         self._last_adv = adv
+        self._last_adv_monotonic = time.monotonic()
         self._data.update(adv.data)
         self._data["rssi"] = adv.rssi
 
@@ -180,19 +264,14 @@ class MerossBLEDevice:
             if self._last_accepted_req_id is not None:
                 accept_gap = (req_id - self._last_accepted_req_id) & 0xFF
                 if accept_gap == 0 or accept_gap > 128:
-                    if (
-                        self.model is MerossModel.MS700
-                        and accept_gap == 0
-                        and self._stale_event_logged_for != req_id
-                    ):
+                    if accept_gap == 0 and self._stale_event_logged_for != req_id:
                         self._stale_event_logged_for = req_id
                         _LOGGER.info(
-                            "%s: MS700 sticky/rebroadcast req_id=%s event=%#x "
-                            "(logical=%s) — ignoring until req_id advances",
+                            "%s: sticky/rebroadcast req_id=%s event=%#x "
+                            "— ignoring until req_id advances (UI time won't update)",
                             self.address,
                             req_id,
                             event_code,
-                            logical,
                         )
                     continue
 
@@ -205,6 +284,13 @@ class MerossBLEDevice:
                     "(req_id=%s event=%#x)",
                     self.address,
                     logical,
+                    req_id,
+                    event_code,
+                )
+            else:
+                _LOGGER.info(
+                    "%s: ACCEPT event req_id=%s event=%#x",
+                    self.address,
                     req_id,
                     event_code,
                 )
@@ -224,6 +310,9 @@ class MerossBLEDevice:
 
     async def identify(self) -> bool:
         """Send Identify (beep/flash) over GATT."""
+        # Prefer connecting on a fresh advertisement window; skip the wait when
+        # we just heard the device (typical UI case after sensors updated).
+        await self._async_wait_for_connect_window(reason="Identify")
         frame = build_identify_frame(self.subdev_type, self._next_msg_id())
         _LOGGER.info(
             "%s: Identify GATT write starting frame=%s",
@@ -284,6 +373,17 @@ class MerossBLEDevice:
         last_error: Exception | None = None
         for attempt in range(1, self.retry_count + 1):
             try:
+                await self._async_prepare_gatt_attempt(attempt)
+                if self._gatt_lock is not None:
+                    async with self._gatt_lock:
+                        return await self._fetch_history_once(
+                            count_builder=count_builder,
+                            data_builder=data_builder,
+                            count_tag=count_tag,
+                            data_tag=data_tag,
+                            scale=scale,
+                            start_idx=start_idx,
+                        )
                 return await self._fetch_history_once(
                     count_builder=count_builder,
                     data_builder=data_builder,
@@ -301,7 +401,8 @@ class MerossBLEDevice:
                     self.retry_count,
                     err,
                 )
-                await asyncio.sleep(0.5)
+                if self._is_slot_or_inprogress_error(err):
+                    await asyncio.sleep(GATT_INPROGRESS_COOLDOWN)
         if last_error:
             raise MerossBLEError(str(last_error)) from last_error
         return []
@@ -320,7 +421,7 @@ class MerossBLEDevice:
             BleakClientWithServiceCache,
             self._device,
             self.name,
-            max_attempts=2,
+            max_attempts=1,
         )
         notify = asyncio.Event()
         payload_box: dict[str, bytes] = {}
@@ -465,17 +566,22 @@ class MerossBLEDevice:
         last_error: Exception | None = None
         for attempt in range(1, self.retry_count + 1):
             try:
+                await self._async_prepare_gatt_attempt(attempt)
+                if self._gatt_lock is not None:
+                    async with self._gatt_lock:
+                        return await self._execute_once(frame)
                 return await self._execute_once(frame)
             except Exception as err:  # noqa: BLE001
                 last_error = err
-                _LOGGER.debug(
+                _LOGGER.warning(
                     "%s frame failed (%s/%s): %s",
                     self.address,
                     attempt,
                     self.retry_count,
                     err,
                 )
-                await asyncio.sleep(0.5)
+                if self._is_slot_or_inprogress_error(err):
+                    await asyncio.sleep(GATT_INPROGRESS_COOLDOWN)
         if last_error:
             raise MerossBLEError(str(last_error)) from last_error
         return b""
@@ -485,7 +591,7 @@ class MerossBLEDevice:
             BleakClientWithServiceCache,
             self._device,
             self.name,
-            max_attempts=2,
+            max_attempts=1,
         )
         notify = asyncio.Event()
         payload_box: dict[str, bytes] = {}

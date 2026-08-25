@@ -12,6 +12,7 @@ from homeassistant.components.recorder.models import StatisticData, StatisticMea
 from homeassistant.components.recorder.statistics import async_import_statistics
 from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util.unit_conversion import TemperatureConverter
 
@@ -31,8 +32,9 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 RECORDER_DOMAIN = "recorder"
-# Match the more-info "5-minute aggregated" history chart.
-STAT_PERIOD = timedelta(minutes=5)
+# async_import_statistics requires hourly buckets (top of the hour UTC). Live HA
+# recorder still collects 5-minute short-term stats while the device is online.
+STAT_PERIOD = timedelta(hours=1)
 
 
 def _period_floor(ts: datetime, period: timedelta) -> datetime:
@@ -47,7 +49,7 @@ def _period_floor(ts: datetime, period: timedelta) -> datetime:
 
 
 def _period_statistics(samples: list[HistorySample]) -> list[StatisticData]:
-    """Bucket samples into 5-minute mean/min/max for recorder import."""
+    """Bucket samples into hourly mean/min/max for recorder import."""
     buckets: dict[datetime, list[float]] = defaultdict(list)
     for sample in samples:
         period = _period_floor(sample.timestamp, STAT_PERIOD)
@@ -140,12 +142,25 @@ def _import_series(
     label: str,
 ) -> bool:
     """Import samples and update progress keys. Return True if entry data changed."""
-    updated = False
-    if all_fetched:
-        new_data[next_key] = max(s.index for s in all_fetched) + 1
-        updated = True
+    if not samples:
+        _LOGGER.info("%s: no new %s history to import", address, label)
+        return False
 
-    if samples and entity_id:
+    if not entity_id:
+        _LOGGER.warning(
+            "%s: %s history fetched (%s samples) but entity not registered yet",
+            address,
+            label,
+            len(samples),
+        )
+        return False
+
+    statistics = _period_statistics(samples)
+    if not statistics:
+        _LOGGER.info("%s: no hourly %s buckets to import", address, label)
+        return False
+
+    try:
         async_import_statistics(
             hass,
             {
@@ -157,27 +172,33 @@ def _import_series(
                 "unit_class": unit_class,
                 "unit_of_measurement": unit_of_measurement,
             },
-            _period_statistics(samples),
+            statistics,
         )
-        new_data[last_ts_key] = max(s.timestamp for s in samples).isoformat()
-        updated = True
-        _LOGGER.info(
-            "%s: imported %s %s history samples into %s",
+    except HomeAssistantError as err:
+        _LOGGER.error(
+            "%s: failed to import %s history into %s (%s firmware samples, "
+            "%s hourly buckets): %s",
             address,
-            len(samples),
             label,
             entity_id,
-        )
-    elif samples:
-        _LOGGER.warning(
-            "%s: %s history fetched (%s samples) but entity not registered yet",
-            address,
-            label,
             len(samples),
+            len(statistics),
+            err,
         )
-    else:
-        _LOGGER.info("%s: no new %s history to import", address, label)
-    return updated
+        return False
+
+    if all_fetched:
+        new_data[next_key] = max(s.index for s in all_fetched) + 1
+    new_data[last_ts_key] = max(s.timestamp for s in samples).isoformat()
+    _LOGGER.info(
+        "%s: imported %s %s history samples as %s hourly buckets into %s",
+        address,
+        len(samples),
+        label,
+        len(statistics),
+        entity_id,
+    )
+    return True
 
 
 async def async_sync_ms120_history(
