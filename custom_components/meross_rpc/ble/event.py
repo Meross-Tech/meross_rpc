@@ -71,21 +71,22 @@ async def async_setup_entry(
                 label = _ms700_button_label(coordinator, button_number)
                 want = ms700_button_enabled(button_number, screen_enable)
                 if want:
-                    if entity_id is None and button_number not in added_buttons:
+                    # Registry entries survive restarts; platform entities do not.
+                    # Always add missing platform entities even when registry
+                    # already has the unique_id (e.g. screen1 after reload).
+                    if button_number not in added_buttons:
                         to_add.append(
                             MerossBLEMS700ButtonEventEntity(
                                 coordinator, button_number, label
                             )
                         )
                         added_buttons.add(button_number)
-                    elif entity_id is not None:
-                        # Clear legacy integration-disable and migrate name.
+                    if entity_id is not None:
                         registry.async_update_entity(
                             entity_id,
                             disabled_by=None,
                             name=label,
                         )
-                        added_buttons.add(button_number)
                 elif entity_id is not None:
                     registry.async_remove(entity_id)
                     added_buttons.discard(button_number)
