@@ -134,7 +134,7 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
             return
         self._available = False
         self._was_unavailable = True
-        _LOGGER.info(
+        _LOGGER.debug(
             "%s: %s no BLE advertisement for %ss → marking unavailable",
             self.address,
             self.model.value.upper(),
@@ -195,82 +195,33 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         self.ble_device = service_info.device
         self.device.update_ble_device(service_info.device)
 
-        raw_hex = _meross_service_data_hex(service_info)
-        _LOGGER.info(
+        _LOGGER.debug(
             "%s: %s BLE packet received rssi=%s change=%s name=%s service_data=%s",
             service_info.address,
             self.model.value.upper(),
             service_info.advertisement.rssi,
             change,
             service_info.name or service_info.advertisement.local_name,
-            raw_hex or "(none)",
+            _meross_service_data_hex(service_info) or "(none)",
         )
 
         adv = parse_advertisement_data(
             service_info.device, service_info.advertisement, self.model
         )
         if not adv:
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "%s: %s BLE packet could not be parsed",
                 service_info.address,
                 self.model.value.upper(),
             )
             return
-        if self.model is MerossModel.MS700:
-            _LOGGER.info(
-                "%s: MS700 BLE packet parsed status=%#x alarm=%#x battery=%s "
-                "events=%s temp=%s humi=%s screen_enable=%s product_data=%s",
-                adv.address,
-                adv.data.get("status", 0),
-                adv.data.get("alarm_status", 0),
-                adv.data.get("battery"),
-                adv.events,
-                adv.data.get("temperature"),
-                adv.data.get("humidity"),
-                adv.data.get("screen_enable"),
-                adv.data.get("product_data"),
-            )
-        elif self.model is MerossModel.MS220:
-            _LOGGER.info(
-                "%s: MS220 BLE packet parsed status=%#x alarm=%#x battery=%s "
-                "door_open=%s vibration=%s alarm_open_long=%s alarm_closed_long=%s "
-                "events=%s",
-                adv.address,
-                adv.data.get("status", 0),
-                adv.data.get("alarm_status", 0),
-                adv.data.get("battery"),
-                adv.data.get("door_open"),
-                adv.data.get("vibration"),
-                adv.data.get("alarm_door_open_long"),
-                adv.data.get("alarm_door_closed_long"),
-                adv.events,
-            )
-        elif self.model is MerossModel.MS120:
-            _LOGGER.info(
-                "%s: MS120 BLE packet parsed status=%#x alarm=%#x battery=%s "
-                "events=%s temp=%s humi=%s product_data=%s",
-                adv.address,
-                adv.data.get("status", 0),
-                adv.data.get("alarm_status", 0),
-                adv.data.get("battery"),
-                adv.events,
-                adv.data.get("temperature"),
-                adv.data.get("humidity"),
-                adv.data.get("product_data"),
-            )
-        elif self.model is MerossModel.MS420:
-            _LOGGER.info(
-                "%s: MS420 BLE packet parsed status=%#x alarm=%#x battery=%s "
-                "water_leak=%s rain=%s freeze=%s events=%s",
-                adv.address,
-                adv.data.get("status", 0),
-                adv.data.get("alarm_status", 0),
-                adv.data.get("battery"),
-                adv.data.get("water_leak"),
-                adv.data.get("rain_detected"),
-                adv.data.get("freeze_alarm"),
-                adv.events,
-            )
+        _LOGGER.debug(
+            "%s: %s BLE packet parsed data=%s events=%s",
+            adv.address,
+            self.model.value.upper(),
+            adv.data,
+            adv.events,
+        )
         self._ready_event.set()
         self._async_schedule_stale_timer()
         self._async_notify_advertisement_waiters()
@@ -279,7 +230,7 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         self.last_new_events = new_events
         recovered = self._was_unavailable or not self.available
         if recovered:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: %s recovered from unavailable (changed=%s events=%s)",
                 adv.address,
                 self.model.value.upper(),
@@ -288,32 +239,23 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
             )
             self._was_unavailable = False
         elif not changed and not new_events:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: %s BLE packet unchanged (no entity update)",
                 adv.address,
                 self.model.value.upper(),
             )
         elif new_events:
-            _LOGGER.info(
-                "%s: Meross BLE events=%s data_keys=%s",
-                self.ble_device.address,
-                new_events,
-                sorted(k for k in adv.data if k in ("temperature", "humidity", "battery")),
-            )
-        else:
             _LOGGER.debug(
-                "%s: Meross BLE data: %s events=%s",
+                "%s: Meross BLE events=%s",
                 self.ble_device.address,
-                adv.data,
                 new_events,
             )
         # Always notify entities so availability recovers after the stale timer
         # even when broadcast payload is unchanged.
         super()._async_handle_bluetooth_event(service_info, change)
         if recovered and self.model is MerossModel.MS120:
-            _LOGGER.info(
-                "%s: device recovered from unavailable → scheduling history sync "
-                "(force full firmware pull for local gap fill)",
+            _LOGGER.debug(
+                "%s: recovered from unavailable → scheduling history sync",
                 self.ble_device.address,
             )
             self.history_force_full_resync = True
@@ -325,13 +267,13 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         if self.model is not MerossModel.MS120:
             return
         if self._history_task and not self._history_task.done():
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: history sync already running, skip schedule",
                 self.ble_device.address,
             )
             return
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "%s: scheduling MS120 history sync task",
             self.ble_device.address,
         )
