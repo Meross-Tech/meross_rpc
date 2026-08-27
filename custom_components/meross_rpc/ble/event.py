@@ -211,7 +211,7 @@ class MerossBLEMS700ButtonEventEntity(_MerossBLEEventEntity):
                     req_id,
                 )
                 continue
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: MS700 entity %s fired press_end (req_id=%s)",
                 self.coordinator.ble_device.address,
                 self._attr_name,

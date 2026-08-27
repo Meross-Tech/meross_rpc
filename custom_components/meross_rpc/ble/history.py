@@ -82,10 +82,9 @@ def _log_temp_sample_audit(address: str, samples: list[HistorySample]) -> None:
             f"value_C={sample.value} value_as_F_if_C={round(f_eq, 2)}"
         )
 
-    _LOGGER.info(
+    _LOGGER.debug(
         "%s: TEMP AUDIT firmware samples n=%s min_C=%s max_C=%s "
-        "first(%s) last(%s) suspicious_for_indoor=%s "
-        "(chart °F≈180 with live °F≈84 usually means ~82 was stored as °C)",
+        "first(%s) last(%s) suspicious_for_indoor=%s",
         address,
         len(samples),
         lo,
@@ -143,7 +142,7 @@ def _import_series(
 ) -> bool:
     """Import samples and update progress keys. Return True if entry data changed."""
     if not samples:
-        _LOGGER.info("%s: no new %s history to import", address, label)
+        _LOGGER.debug("%s: no new %s history to import", address, label)
         return False
 
     if not entity_id:
@@ -157,7 +156,7 @@ def _import_series(
 
     statistics = _period_statistics(samples)
     if not statistics:
-        _LOGGER.info("%s: no hourly %s buckets to import", address, label)
+        _LOGGER.debug("%s: no hourly %s buckets to import", address, label)
         return False
 
     try:
@@ -190,7 +189,7 @@ def _import_series(
     if all_fetched:
         new_data[next_key] = max(s.index for s in all_fetched) + 1
     new_data[last_ts_key] = max(s.timestamp for s in samples).isoformat()
-    _LOGGER.info(
+    _LOGGER.debug(
         "%s: imported %s %s history samples as %s hourly buckets into %s",
         address,
         len(samples),
@@ -223,10 +222,9 @@ async def async_sync_ms120_history(
     temp_cutoff = _parse_cutoff(entry.data.get(CONF_TEMP_HISTORY_LAST_TS))
     humi_cutoff = _parse_cutoff(entry.data.get(CONF_HUMI_HISTORY_LAST_TS))
 
-    _LOGGER.info(
+    _LOGGER.debug(
         "%s: history sync START model=%s force_full=%s "
-        "temp_next_idx=%s humi_next_idx=%s temp_cutoff=%s humi_cutoff=%s "
-        "(request firmware when local history has a gap)",
+        "temp_next_idx=%s humi_next_idx=%s temp_cutoff=%s humi_cutoff=%s",
         coordinator.ble_device.address,
         coordinator.model,
         force_full,
@@ -248,7 +246,7 @@ async def async_sync_ms120_history(
     if force_full:
         temp_samples = _filter_newer(temp_all, temp_cutoff)
         humi_samples = _filter_newer(humi_all, humi_cutoff)
-        _LOGGER.info(
+        _LOGGER.debug(
             "%s: force_full pulled temp=%s humi=%s → newer than cutoff "
             "temp=%s humi=%s",
             coordinator.ble_device.address,
@@ -262,7 +260,7 @@ async def async_sync_ms120_history(
         humi_samples = humi_all
 
     if temp_all:
-        _LOGGER.info(
+        _LOGGER.debug(
             "%s: temp firmware range %s .. %s (n=%s)",
             coordinator.ble_device.address,
             temp_all[0].timestamp.isoformat(),
@@ -275,7 +273,7 @@ async def async_sync_ms120_history(
             f"{coordinator.ble_device.address}(import_subset)", temp_samples
         )
     if humi_all:
-        _LOGGER.info(
+        _LOGGER.debug(
             "%s: humi firmware range %s .. %s (n=%s)",
             coordinator.ble_device.address,
             humi_all[0].timestamp.isoformat(),
@@ -320,7 +318,7 @@ async def async_sync_ms120_history(
 
     if updated:
         hass.config_entries.async_update_entry(entry, data=new_data)
-        _LOGGER.info(
+        _LOGGER.debug(
             "%s: history sync DONE next_idx temp=%s humi=%s last_ts temp=%s humi=%s",
             address,
             new_data.get(CONF_TEMP_HISTORY_NEXT_IDX),
@@ -329,4 +327,4 @@ async def async_sync_ms120_history(
             new_data.get(CONF_HUMI_HISTORY_LAST_TS),
         )
     else:
-        _LOGGER.info("%s: history sync DONE (nothing imported)", address)
+        _LOGGER.debug("%s: history sync DONE (nothing imported)", address)

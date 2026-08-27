@@ -150,14 +150,14 @@ class MerossBLEDevice:
         if self._wait_advertisement is None:
             return
         if self._adv_is_fresh():
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: %s — recent advertisement (≤%.0fs), connecting immediately",
                 self.address,
                 reason,
                 GATT_FRESH_ADV_SECONDS,
             )
             return
-        _LOGGER.info(
+        _LOGGER.debug(
             "%s: %s — waiting up to %.0fs for next advertisement",
             self.address,
             reason,
@@ -205,7 +205,7 @@ class MerossBLEDevice:
             req_id, event_code = adv.events[0]
             self._last_accepted_req_id = req_id
             self._last_seen_req_id = req_id
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: bootstrap event req_id=%s event=%#x — ignore sticky "
                 "press from before HA start; wait for newer req_id",
                 self.address,
@@ -239,7 +239,7 @@ class MerossBLEDevice:
             self._last_seen_req_id = req_id
 
             if self.model is MerossModel.MS700:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "%s: MS700 adv event raw req_id=%s event=%#x "
                     "screen=%s button=%s logical=%s product_data=%s",
                     self.address,
@@ -266,9 +266,9 @@ class MerossBLEDevice:
                 if accept_gap == 0 or accept_gap > 128:
                     if accept_gap == 0 and self._stale_event_logged_for != req_id:
                         self._stale_event_logged_for = req_id
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "%s: sticky/rebroadcast req_id=%s event=%#x "
-                            "— ignoring until req_id advances (UI time won't update)",
+                            "— ignoring until req_id advances",
                             self.address,
                             req_id,
                             event_code,
@@ -278,22 +278,13 @@ class MerossBLEDevice:
             self._last_accepted_req_id = req_id
             self._stale_event_logged_for = None
             new_events.append((req_id, event_code))
-            if self.model is MerossModel.MS700:
-                _LOGGER.info(
-                    "%s: MS700 ACCEPT press → HA Button %s "
-                    "(req_id=%s event=%#x)",
-                    self.address,
-                    logical,
-                    req_id,
-                    event_code,
-                )
-            else:
-                _LOGGER.info(
-                    "%s: ACCEPT event req_id=%s event=%#x",
-                    self.address,
-                    req_id,
-                    event_code,
-                )
+            _LOGGER.debug(
+                "%s: ACCEPT event req_id=%s event=%#x logical=%s",
+                self.address,
+                req_id,
+                event_code,
+                logical,
+            )
         return new_events
 
     def poll_needed(self, seconds_since_last_poll: float | None) -> bool:
@@ -314,7 +305,7 @@ class MerossBLEDevice:
         # we just heard the device (typical UI case after sensors updated).
         await self._async_wait_for_connect_window(reason="Identify")
         frame = build_identify_frame(self.subdev_type, self._next_msg_id())
-        _LOGGER.info(
+        _LOGGER.debug(
             "%s: Identify GATT write starting frame=%s",
             self.address,
             frame.hex(),
@@ -322,13 +313,10 @@ class MerossBLEDevice:
         raw = await self._request_raw(frame)
         # No notify still counts as success for identify (device may not ACK)
         if not raw:
-            _LOGGER.info(
-                "%s: Identify write done (no notify ACK)",
-                self.address,
-            )
+            _LOGGER.debug("%s: Identify write done (no notify ACK)", self.address)
             return True
         ok = parse_ack_success(raw)
-        _LOGGER.info(
+        _LOGGER.debug(
             "%s: Identify write done ack_ok=%s notify=%s",
             self.address,
             ok,
@@ -437,7 +425,7 @@ class MerossBLEDevice:
             await asyncio.sleep(0.5)
 
             count_frame = count_builder(self.subdev_type, self._next_msg_id())
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: history COUNT request tag=%#x write=%s",
                 self.address,
                 count_tag,
@@ -451,7 +439,7 @@ class MerossBLEDevice:
                 write_with_response=False,
                 timeout=10.0,
             )
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: history COUNT notify tag=%#x raw=%s",
                 self.address,
                 count_tag,
@@ -469,7 +457,7 @@ class MerossBLEDevice:
                     f"Invalid history count response for tag {count_tag:#x}; "
                     f"tlvs={tags} raw={count_raw.hex()}"
                 )
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: history COUNT ok tag=%#x total=%s start_idx=%s",
                 self.address,
                 count_tag,
@@ -477,7 +465,7 @@ class MerossBLEDevice:
                 start_idx,
             )
             if total <= start_idx:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "%s: history nothing new tag=%#x (total=%s <= start_idx=%s)",
                     self.address,
                     count_tag,
@@ -495,7 +483,7 @@ class MerossBLEDevice:
                 data_frame = data_builder(
                     self.subdev_type, start, end, self._next_msg_id()
                 )
-                _LOGGER.info(
+                _LOGGER.debug(
                     "%s: history DATA request tag=%#x idx=%s-%s write=%s",
                     self.address,
                     data_tag,
@@ -511,14 +499,13 @@ class MerossBLEDevice:
                     write_with_response=False,
                     timeout=10.0,
                 )
-                _LOGGER.info(
-                    "%s: history DATA notify tag=%#x idx=%s-%s raw_len=%s raw=%s",
+                _LOGGER.debug(
+                    "%s: history DATA notify tag=%#x idx=%s-%s raw_len=%s",
                     self.address,
                     data_tag,
                     start,
                     end,
                     len(page_raw) if page_raw else 0,
-                    page_raw.hex() if page_raw else "<empty>",
                 )
                 page = parse_history_samples(page_raw, data_tag, scale=scale)
                 if not page:
@@ -530,23 +517,7 @@ class MerossBLEDevice:
                         data_tag,
                     )
                     break
-                if data_tag == TAG_TEMP_HISTORY_DATA:
-                    # Decode first record raw int16 for unit debugging
-                    for tag, value in iter_tlvs(page_raw):
-                        if tag == data_tag and len(value) >= 8:
-                            raw16 = int.from_bytes(value[6:8], "big", signed=True)
-                            _LOGGER.info(
-                                "%s: TEMP RAW sample0 idx=%s raw_int16=%s "
-                                "/100=%.2f°C (≈%.2f°F) parsed0=%s",
-                                self.address,
-                                int.from_bytes(value[0:2], "big"),
-                                raw16,
-                                raw16 / 100,
-                                raw16 / 100 * 9 / 5 + 32,
-                                page[0].value,
-                            )
-                            break
-                _LOGGER.info(
+                _LOGGER.debug(
                     "%s: history DATA parsed %s samples tag=%#x first=%s last=%s",
                     self.address,
                     len(page),
@@ -630,7 +601,7 @@ class MerossBLEDevice:
             async with asyncio.timeout(timeout):
                 await notify.wait()
         except TimeoutError:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: no notify within %.1fs for frame %s",
                 self.address,
                 timeout,
