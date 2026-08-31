@@ -18,7 +18,7 @@ DEVICE_STARTUP_TIMEOUT = 30
 # Local watchdog: mark unavailable if no parseable advertisement.
 # Needed on macOS where Bleak's discovered cache often never expires, so HA's
 # async_track_unavailable may never fire after battery removal / BT off.
-ADVERTISEMENT_STALE_SECONDS = 195
+ADVERTISEMENT_STALE_SECONDS = 600
 # Shared across all Meross BLE entries: Pi/USB adapters often have 1 connection slot.
 DATA_BLE_GATT_LOCK = "ble_gatt_lock"
 # After a failed GATT attempt, wait for the next advertisement before retrying

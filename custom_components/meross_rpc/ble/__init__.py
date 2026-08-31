@@ -83,7 +83,7 @@ async def async_setup_bluetooth_entry(
     gatt_connectable = True
     # False = receive connectable and non-connectable ads. Door/button wake
     # packets are often flagged non-connectable on macOS; True would drop
-    # them so Opening never updates after the 195s unavailable watchdog.
+    # them so Opening never updates after the unavailable watchdog.
     advertisement_connectable = False
     retry_count = entry.options.get(CONF_RETRY_COUNT, DEFAULT_RETRY_COUNT)
 

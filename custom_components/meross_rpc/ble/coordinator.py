@@ -452,7 +452,7 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
     ) -> None:
         # HA's async_track_unavailable (~30s) fires on missed scans even when
         # firmware is still advertising. Ignore it; offline is decided only by
-        # the 195s stale timer after parseable advertisements stop.
+        # the stale timer after parseable advertisements stop.
         self._last_name = service_info.name
         _LOGGER.debug(
             "%s: HA bluetooth reported unavailable for %s "
@@ -533,7 +533,7 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         self._ready_event.set()
         # Firmware advertises on a fixed interval even when state is unchanged.
         # Always reset the watchdog so MS220/MS420/MS700 do not go unavailable
-        # after 195s of identical keepalives, and can recover from unavailable.
+        # after long identical keepalives, and can recover from unavailable.
         self._last_parseable_monotonic = time.monotonic()
         self._async_schedule_stale_timer()
         self._async_notify_advertisement_waiters()
