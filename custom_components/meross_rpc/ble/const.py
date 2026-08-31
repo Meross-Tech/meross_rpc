@@ -108,10 +108,6 @@ PASSIVE_MODELS = {
     MerossModel.MS700,
 }
 
-# Models that repeat advertisements on a fixed interval even when readings
-# are unchanged (MS120 temp/humidity). Any parseable ad resets the watchdog.
-PERIODIC_ADVERTISEMENT_MODELS = {MerossModel.MS120}
-
 # MS220 status / alarm bits (ms220.md)
 MS220_STATUS_DOOR_OPEN = 0x01
 # Legacy firmware put vibration here; new firmware uses alarm_status bit2.

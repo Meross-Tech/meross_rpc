@@ -7,8 +7,8 @@ Common payload (after Service Data UUID 0x30be):
     2  status           bitmap (product-defined)
     3  alarm_status     bitmap (product-defined)
     4  battery          0-100 or 0xFF unavailable
-    5  reserved[0]      0x00
-    6  reserved[1]      0x00
+    5  adv_seq          increments when payload content changes
+    6  reserved         0x00
     7  report_cnt       N instantaneous events
     8..  events          N x [reqId][event]
     then product_data
@@ -218,12 +218,14 @@ def _parse_payload(payload: bytes, model: MerossModel) -> tuple[dict[str, Any], 
     status = payload[2]
     alarm_status = payload[3]
     battery = payload[4]
+    adv_seq = payload[5]
     report_cnt = payload[7]
 
     data["protocol_ver"] = protocol_ver
     data["subdev_type"] = subdev
     data["status"] = status
     data["alarm_status"] = alarm_status
+    data["adv_seq"] = adv_seq
     if battery == BATTERY_UNAVAILABLE:
         data["battery"] = None
     elif 0 <= battery <= 100:

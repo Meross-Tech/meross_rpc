@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import sys
+import time
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -26,11 +26,10 @@ from .const import (
     MS220_EVENT_BUTTON_SINGLE,
     MS220_EVENT_DOORBELL,
     MerossModel,
-    PERIODIC_ADVERTISEMENT_MODELS,
 )
 from .device import MerossBLEDevice, MerossBLEError
 from .history import async_sync_ms120_history
-from .parser import parse_advertisement_data
+from .parser import MerossAdvertisement, parse_advertisement_data
 
 if TYPE_CHECKING:
     from bleak.backends.device import BLEDevice
@@ -38,6 +37,15 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 type MerossBLEConfigEntry = ConfigEntry[MerossBLEDataUpdateCoordinator]
+
+_LOG_TAG_ROUTINE = "日常---"
+_LOG_TAG_CHANGE = "改变----"
+_LOG_TAG_OFFLINE = "离线----"
+
+
+def _device_log_label(device_name: str, tag: str) -> str:
+    """Device name + Chinese log marker for grep-friendly HA logs."""
+    return f"{device_name} {tag}"
 
 
 _MS220_DOOR_ALARM_LOG_KEYS = (
@@ -62,7 +70,7 @@ def _ms220_field_changed(
 
 
 def _log_ms220_door_alarm_if_changed(
-    address: str, prev: dict, current: dict
+    device_name: str, prev: dict, current: dict
 ) -> None:
     """INFO for MS220 door open/close and long-open / long-closed / vibration alarms."""
     if not any(key in current for key in _MS220_DOOR_ALARM_LOG_KEYS):
@@ -72,8 +80,8 @@ def _log_ms220_door_alarm_if_changed(
         door_open = current["door_open"]
         if door_open is not None:
             _LOGGER.info(
-                "%s: MS220 door %s",
-                address,
+                "%s MS220 door %s",
+                _device_log_label(device_name, _LOG_TAG_CHANGE),
                 "open" if door_open else "closed",
             )
 
@@ -88,8 +96,8 @@ def _log_ms220_door_alarm_if_changed(
             continue
         active = current.get(key) is True
         _LOGGER.info(
-            "%s: MS220 alarm %s %s (status=0x%x enable_map=0x%x)",
-            address,
+            "%s MS220 alarm %s %s (status=0x%x enable_map=0x%x)",
+            _device_log_label(device_name, _LOG_TAG_CHANGE),
             label,
             "on" if active else "cleared",
             current.get("alarm_status", 0),
@@ -98,14 +106,37 @@ def _log_ms220_door_alarm_if_changed(
 
     if _ms220_field_changed(prev, current, "alarm_enable_map"):
         _LOGGER.debug(
-            "%s: MS220 alarm enable_map=0x%x "
+            "%s MS220 alarm enable_map=0x%x "
             "enable_open=%s enable_closed=%s enable_vibration=%s",
-            address,
+            _device_log_label(device_name, _LOG_TAG_CHANGE),
             current.get("alarm_enable_map", 0),
             current.get("alarm_enable_door_open_long"),
             current.get("alarm_enable_door_closed_long"),
             current.get("alarm_enable_vibration"),
         )
+
+
+_ENV_LOG_KEYS = ("temperature", "humidity", "battery")
+
+
+def _log_env_if_changed(
+    device_name: str, model: str, prev: dict, current: dict
+) -> None:
+    """INFO when temperature / humidity / battery change (MS120 / MS700 / others)."""
+    parts: list[str] = []
+    for key in _ENV_LOG_KEYS:
+        if key not in current:
+            continue
+        if not prev or prev.get(key) != current.get(key):
+            parts.append(f"{key}={current.get(key)!r}")
+    if not parts:
+        return
+    _LOGGER.info(
+        "%s %s %s",
+        _device_log_label(device_name, _LOG_TAG_CHANGE),
+        model,
+        " ".join(parts),
+    )
 
 
 _MS220_EVENT_LABELS = {
@@ -116,15 +147,17 @@ _MS220_EVENT_LABELS = {
 
 
 def _log_ms220_events(
-    address: str, accepted: list[tuple[int, int]], raw: list[tuple[int, int]]
+    device_name: str,
+    accepted: list[tuple[int, int]],
+    raw: list[tuple[int, int]],
 ) -> None:
     """INFO for MS220 doorbell / button advertisements."""
     accepted_ids = {req_id for req_id, _event in accepted}
     for req_id, event_code in accepted:
         label = _MS220_EVENT_LABELS.get(event_code, f"event={event_code:#x}")
         _LOGGER.info(
-            "%s: MS220 %s (req_id=%s)",
-            address,
+            "%s MS220 %s (req_id=%s)",
+            _device_log_label(device_name, _LOG_TAG_CHANGE),
             label,
             req_id,
         )
@@ -134,11 +167,92 @@ def _log_ms220_events(
         if event_code not in _MS220_EVENT_LABELS:
             continue
         _LOGGER.debug(
-            "%s: MS220 %s ignored sticky/rebroadcast (req_id=%s)",
-            address,
+            "%s MS220 %s ignored sticky/rebroadcast (req_id=%s)",
+            _device_log_label(device_name, _LOG_TAG_ROUTINE),
             _MS220_EVENT_LABELS[event_code],
             req_id,
         )
+
+
+# While unavailable, dump HA bluetooth-manager cache this often.
+# Callbacks may never fire; the cache still shows last_seen.
+_UNAVAILABLE_ADV_PROBE_SECONDS = 10.0
+
+
+def _format_parsed_packet(adv: MerossAdvertisement, raw_hex: str) -> str:
+    """Parsed 0xBE30 payload for INFO logs (all models)."""
+    skip = {"model", "modelName", "modelFriendlyName", "address", "rssi"}
+    fields = {key: value for key, value in adv.data.items() if key not in skip}
+    adv_seq = adv.data.get("adv_seq")
+    seq_part = (
+        f"adv_seq={adv_seq} (0x{adv_seq:02x}) "
+        if isinstance(adv_seq, int)
+        else ""
+    )
+    return f"{seq_part}rssi={adv.rssi} events={list(adv.events)} data={fields} raw={raw_hex}"
+
+
+def _adv_seq_from_raw_hex(raw_hex: str) -> int | None:
+    """Return adv_seq (payload byte 5) from 0xBE30 service_data hex."""
+    if len(raw_hex) < 12:
+        return None
+    try:
+        return int(raw_hex[10:12], 16)
+    except ValueError:
+        return None
+
+
+def _summarize_data_changes(prev: dict, current: dict) -> str:
+    """Human-readable field diffs, ignoring rssi/address/raw product_data."""
+    ignore = {
+        "rssi",
+        "address",
+        "product_data",
+        "model",
+        "modelName",
+        "modelFriendlyName",
+    }
+    diffs: list[str] = []
+    for key in sorted(set(prev) | set(current)):
+        if key in ignore:
+            continue
+        old, new = prev.get(key), current.get(key)
+        if old != new:
+            diffs.append(f"{key}={old!r}->{new!r}")
+    return ", ".join(diffs) if diffs else "none"
+
+
+def _format_advertisement_dump(
+    service_info: bluetooth.BluetoothServiceInfoBleak,
+    change: bluetooth.BluetoothChange | None = None,
+) -> str:
+    """Compact dump of a BLE advertisement for unavailable-path logging."""
+    adv = service_info.advertisement
+    service_data = {
+        str(key): bytes(value).hex()
+        for key, value in (adv.service_data or {}).items()
+    }
+    manufacturer = {
+        hex(key): bytes(value).hex()
+        for key, value in (adv.manufacturer_data or {}).items()
+    }
+    change_part = f"change={change} " if change is not None else ""
+    age = time.monotonic() - service_info.time
+    raw_hex = _meross_service_data_hex(service_info)
+    adv_seq = _adv_seq_from_raw_hex(raw_hex) if raw_hex else None
+    seq_part = (
+        f"adv_seq={adv_seq} (0x{adv_seq:02x}) "
+        if adv_seq is not None
+        else ""
+    )
+    return (
+        f"{seq_part}age={age:.1f}s rssi={service_info.rssi} {change_part}"
+        f"name={service_info.name!r} local_name={adv.local_name!r} "
+        f"connectable={service_info.connectable} "
+        f"service_uuids={list(adv.service_uuids or [])} "
+        f"service_data={service_data or '(none)'} "
+        f"manufacturer_data={manufacturer or '(none)'}"
+    )
 
 
 def _meross_service_data_hex(service_info: bluetooth.BluetoothServiceInfoBleak) -> str:
@@ -194,9 +308,9 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         # Instantaneous events from the latest advertisement (after dedup)
         self.last_new_events: list[tuple[int, int]] = []
         self._stale_unsub: CALLBACK_TYPE | None = None
+        self._unavailable_probe_unsub: CALLBACK_TYPE | None = None
+        self._last_parseable_monotonic: float | None = None
         self._adv_waiters: list[asyncio.Event] = []
-        self._gatt_status_lock = asyncio.Lock()
-        self._gatt_status_task: asyncio.Task[None] | None = None
 
     @callback
     def _async_notify_advertisement_waiters(self) -> None:
@@ -225,6 +339,64 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
             self._stale_unsub = None
 
     @callback
+    def _async_cancel_unavailable_adv_probe(self) -> None:
+        if self._unavailable_probe_unsub is not None:
+            self._unavailable_probe_unsub()
+            self._unavailable_probe_unsub = None
+
+    @callback
+    def _async_log_bluetooth_manager_advertisement(self, reason: str) -> None:
+        """Dump HA scanner cache — fires even when no advertisement callback arrives."""
+        parseable_age = (
+            time.monotonic() - self._last_parseable_monotonic
+            if self._last_parseable_monotonic is not None
+            else None
+        )
+        parseable_txt = (
+            f"{parseable_age:.1f}s" if parseable_age is not None else "never"
+        )
+        service_info = bluetooth.async_last_service_info(
+            self.hass, self.address, connectable=False
+        )
+        if service_info is None:
+            _LOGGER.debug(
+                "%s: %s bluetooth manager has no advertisement "
+                "(%s; last parseable=%s)",
+                self.address,
+                self.model.value.upper(),
+                reason,
+                parseable_txt,
+            )
+            return
+        _LOGGER.debug(
+            "%s: %s bluetooth manager advertisement "
+            "(%s; last parseable=%s) %s",
+            self.address,
+            self.model.value.upper(),
+            reason,
+            parseable_txt,
+            _format_advertisement_dump(service_info),
+        )
+
+    @callback
+    def _async_schedule_unavailable_adv_probe(self) -> None:
+        self._async_cancel_unavailable_adv_probe()
+        self._unavailable_probe_unsub = async_call_later(
+            self.hass,
+            _UNAVAILABLE_ADV_PROBE_SECONDS,
+            self._async_unavailable_adv_probe,
+        )
+
+    @callback
+    def _async_unavailable_adv_probe(self, _now: datetime) -> None:
+        """Poll scanner cache while the device stays unavailable (no callback required)."""
+        self._unavailable_probe_unsub = None
+        if not self._was_unavailable and self.available:
+            return
+        self._async_log_bluetooth_manager_advertisement("still unavailable")
+        self._async_schedule_unavailable_adv_probe()
+
+    @callback
     def _async_schedule_stale_timer(self) -> None:
         """Restart watchdog after a parseable advertisement."""
         self._async_cancel_stale_timer()
@@ -243,11 +415,13 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         self._available = False
         self._was_unavailable = True
         _LOGGER.info(
-            "%s: %s no BLE advertisement for %ss → marking unavailable",
-            self.address,
+            "%s %s no parseable BLE advertisement for %ss → marking unavailable",
+            _device_log_label(self.device_name, _LOG_TAG_OFFLINE),
             self.model.value.upper(),
             ADVERTISEMENT_STALE_SECONDS,
         )
+        self._async_log_bluetooth_manager_advertisement("marking unavailable")
+        self._async_schedule_unavailable_adv_probe()
         self.async_update_listeners()
 
     @callback
@@ -276,10 +450,9 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
     def _async_handle_unavailable(
         self, service_info: bluetooth.BluetoothServiceInfoBleak
     ) -> None:
-        # Meross battery devices often pause ads for 30s–60s when state is
-        # unchanged. HA's async_track_unavailable (~30s) is too aggressive and
-        # would cancel our 195s stale timer. Keep last name only; offline is
-        # decided exclusively by _async_advertisement_stale.
+        # HA's async_track_unavailable (~30s) fires on missed scans even when
+        # firmware is still advertising. Ignore it; offline is decided only by
+        # the 195s stale timer after parseable advertisements stop.
         self._last_name = service_info.name
         _LOGGER.debug(
             "%s: HA bluetooth reported unavailable for %s "
@@ -292,6 +465,7 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
     @callback
     def _async_stop(self) -> None:
         self._async_cancel_stale_timer()
+        self._async_cancel_unavailable_adv_probe()
         super()._async_stop()
 
     @callback
@@ -304,114 +478,75 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         self.device.update_ble_device(service_info.device)
         recovered = self._was_unavailable or not self.available
         raw_hex = _meross_service_data_hex(service_info) or "(none)"
+        path = "after unavailable" if recovered else "online"
 
-        if recovered:
-            _LOGGER.debug(
-                "%s: %s BLE packet after unavailable rssi=%s "
-                "change=%s name=%s service_data=%s",
-                service_info.address,
-                self.model.value.upper(),
-                service_info.advertisement.rssi,
-                change,
-                service_info.name or service_info.advertisement.local_name,
-                raw_hex,
-            )
-        else:
-            _LOGGER.debug(
-                "%s: %s BLE packet received rssi=%s change=%s name=%s "
-                "service_data=%s",
-                service_info.address,
-                self.model.value.upper(),
-                service_info.advertisement.rssi,
-                change,
-                service_info.name or service_info.advertisement.local_name,
-                raw_hex,
-            )
+        _LOGGER.debug(
+            "%s: %s advertisement (%s) %s",
+            service_info.address,
+            self.model.value.upper(),
+            path,
+            _format_advertisement_dump(service_info, change),
+        )
 
         adv = parse_advertisement_data(
             service_info.device, service_info.advertisement, self.model
         )
         if not adv or "status" not in adv.data:
-            if recovered:
-                _LOGGER.debug(
-                    "%s: %s ignored incomplete advertisement after "
-                    "unavailable (service_data=%s)",
-                    service_info.address,
-                    self.model.value.upper(),
-                    raw_hex,
-                )
-                self.async_schedule_gatt_status_sync()
-            else:
-                _LOGGER.debug(
-                    "%s: %s BLE packet could not be parsed",
-                    service_info.address,
-                    self.model.value.upper(),
-                )
+            log_fn = _LOGGER.info if recovered else _LOGGER.debug
+            tag = _LOG_TAG_CHANGE if recovered else _LOG_TAG_ROUTINE
+            log_fn(
+                "%s %s advertisement (%s) could not be parsed "
+                "(no 0xBE30 status; service_data=%s)",
+                _device_log_label(self.device_name, tag),
+                self.model.value.upper(),
+                path,
+                raw_hex,
+            )
             return
-        _LOGGER.debug(
-            "%s: %s BLE packet parsed data=%s events=%s",
-            adv.address,
-            self.model.value.upper(),
-            adv.data,
-            adv.events,
-        )
         prev_data = dict(self.device.data)
         changed = self.device.advertisement_changed(adv)
         new_events = self.device.update_from_advertisement(adv)
-        # macOS rebroadcasts the last closed payload when the radio
-        # wakes. Applying it would go available+closed and hide the
-        # following door-open advertisement.
-        if (
-            recovered
-            and self.model is MerossModel.MS220
-            and not changed
-            and not new_events
-        ):
-            _LOGGER.debug(
-                "%s: MS220 ignored cached rebroadcast after unavailable "
-                "(door_open=%s service_data=%s)",
-                adv.address,
-                adv.data.get("door_open"),
-                raw_hex,
+        parsed_txt = _format_parsed_packet(adv, raw_hex)
+        if recovered:
+            _LOGGER.info(
+                "%s %s recovered %s",
+                _device_log_label(self.device_name, _LOG_TAG_CHANGE),
+                self.model.value.upper(),
+                parsed_txt,
             )
-            self.async_schedule_gatt_status_sync()
-            return
+        elif changed or new_events:
+            _LOGGER.info(
+                "%s %s diff=%s events=%s %s",
+                _device_log_label(self.device_name, _LOG_TAG_CHANGE),
+                self.model.value.upper(),
+                _summarize_data_changes(prev_data, adv.data),
+                new_events,
+                parsed_txt,
+            )
+        else:
+            _LOGGER.info(
+                "%s %s %s",
+                _device_log_label(self.device_name, _LOG_TAG_ROUTINE),
+                self.model.value.upper(),
+                parsed_txt,
+            )
         self._ready_event.set()
-        if (
-            self.model in PERIODIC_ADVERTISEMENT_MODELS
-            or changed
-            or new_events
-            or recovered
-        ):
-            self._async_schedule_stale_timer()
+        # Firmware advertises on a fixed interval even when state is unchanged.
+        # Always reset the watchdog so MS220/MS420/MS700 do not go unavailable
+        # after 195s of identical keepalives, and can recover from unavailable.
+        self._last_parseable_monotonic = time.monotonic()
+        self._async_schedule_stale_timer()
         self._async_notify_advertisement_waiters()
         if self.model is MerossModel.MS220:
-            _log_ms220_door_alarm_if_changed(adv.address, prev_data, adv.data)
-            _log_ms220_events(adv.address, new_events, adv.events)
+            _log_ms220_door_alarm_if_changed(self.device_name, prev_data, adv.data)
+            _log_ms220_events(self.device_name, new_events, adv.events)
+        _log_env_if_changed(
+            self.device_name, self.model.value.upper(), prev_data, adv.data
+        )
         self.last_new_events = new_events
         if recovered:
-            _LOGGER.debug(
-                "%s: %s recovered from unavailable "
-                "(door_open=%s changed=%s events=%s)",
-                adv.address,
-                self.model.value.upper(),
-                adv.data.get("door_open"),
-                changed,
-                new_events,
-            )
             self._was_unavailable = False
-        elif not changed and not new_events:
-            _LOGGER.debug(
-                "%s: %s BLE packet unchanged (no entity update)",
-                adv.address,
-                self.model.value.upper(),
-            )
-        elif new_events:
-            _LOGGER.debug(
-                "%s: Meross BLE events=%s",
-                self.ble_device.address,
-                new_events,
-            )
+            self._async_cancel_unavailable_adv_probe()
         super()._async_handle_bluetooth_event(service_info, change)
         if recovered and self.model is MerossModel.MS120:
             _LOGGER.debug(
@@ -420,53 +555,6 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
             )
             self.history_force_full_resync = True
             self.async_schedule_history_sync()
-
-    @callback
-    def async_schedule_gatt_status_sync(self) -> None:
-        """MS220 on macOS: GATT heartbeat when ads lack service_data."""
-        if self.model is not MerossModel.MS220 or sys.platform != "darwin":
-            return
-        if not self._was_unavailable and self.available:
-            return
-        if self._gatt_status_task and not self._gatt_status_task.done():
-            _LOGGER.debug(
-                "%s: MS220 GATT status sync already running, skip schedule",
-                self.address,
-            )
-            return
-        _LOGGER.debug(
-            "%s: MS220 scheduling GATT status sync (heartbeat)",
-            self.address,
-        )
-
-        async def _run() -> None:
-            async with self._gatt_status_lock:
-                if not self._was_unavailable and self.available:
-                    return
-                try:
-                    await self.device.async_send_heartbeat()
-                except MerossBLEError as err:
-                    _LOGGER.warning(
-                        "%s: MS220 GATT heartbeat failed: %s",
-                        self.address,
-                        err,
-                    )
-                    return
-                if await self.async_wait_next_advertisement(GATT_ADV_WAIT_TIMEOUT):
-                    _LOGGER.debug(
-                        "%s: MS220 GATT status sync received status advertisement",
-                        self.address,
-                    )
-                    return
-                _LOGGER.debug(
-                    "%s: MS220 GATT status sync timed out after %.0fs",
-                    self.address,
-                    GATT_ADV_WAIT_TIMEOUT,
-                )
-
-        self._gatt_status_task = self.hass.async_create_task(
-            _run(), name=f"meross_rpc_ble_gatt_status_{self.base_unique_id}"
-        )
 
     @callback
     def async_schedule_history_sync(self) -> None:
