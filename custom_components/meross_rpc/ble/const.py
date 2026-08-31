@@ -108,13 +108,43 @@ PASSIVE_MODELS = {
     MerossModel.MS700,
 }
 
-# MS220 status / alarm bits (ms220_ha.md)
+# Models that repeat advertisements on a fixed interval even when readings
+# are unchanged (MS120 temp/humidity). Any parseable ad resets the watchdog.
+PERIODIC_ADVERTISEMENT_MODELS = {MerossModel.MS120}
+
+# MS220 status / alarm bits (ms220.md)
 MS220_STATUS_DOOR_OPEN = 0x01
+# Legacy firmware put vibration here; new firmware uses alarm_status bit2.
 MS220_STATUS_VIBRATION = 0x02
 MS220_ALARM_DOOR_OPEN_LONG = 0x01
 MS220_ALARM_DOOR_CLOSED_LONG = 0x02
+MS220_ALARM_VIBRATION = 0x04
+# product_data alarm_enable_map mirrors alarm_status (ms220.md)
+MS220_ALARM_ENABLE_DOOR_OPEN_LONG = 0x01
+MS220_ALARM_ENABLE_DOOR_CLOSED_LONG = 0x02
+MS220_ALARM_ENABLE_VIBRATION = 0x04
+MS220_ALARM_ENABLE_ALL = 0x07
 
-# MS220 report_event codes (doorbell / big button; door/vibration use status)
+MS220_ALARM_ENABLE_KEY_BY_SENSOR: dict[str, str] = {
+    "alarm_door_open_long": "alarm_enable_door_open_long",
+    "alarm_door_closed_long": "alarm_enable_door_closed_long",
+    "alarm_vibration": "alarm_enable_vibration",
+}
+
+
+def ms220_alarm_feature_enabled(sensor_key: str, data: dict) -> bool | None:
+    """Whether an optional MS220 alarm is enabled in the Meross app.
+
+    Returns None when firmware does not advertise alarm_enable_map (legacy).
+    """
+    if "alarm_enable_map" not in data:
+        return None
+    enable_key = MS220_ALARM_ENABLE_KEY_BY_SENSOR.get(sensor_key)
+    if enable_key is None:
+        return None
+    return data.get(enable_key) is True
+
+# MS220 report_event codes (doorbell / big button; door uses status)
 MS220_EVENT_DOORBELL = 0x06
 MS220_EVENT_BUTTON_SINGLE = 0x07
 MS220_EVENT_BUTTON_DOUBLE = 0x08

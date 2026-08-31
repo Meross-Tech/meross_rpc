@@ -140,6 +140,9 @@
       "vibration": {
         "name": "Vibration"
       },
+      "alarm_vibration": {
+        "name": "Vibration alarm"
+      },
       "alarm_door_open_long": {
         "name": "Door open too long"
       },

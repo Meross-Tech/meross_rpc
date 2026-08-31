@@ -14,7 +14,11 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import BATTERY_LOW_THRESHOLD, MerossModel
+from .const import (
+    BATTERY_LOW_THRESHOLD,
+    MerossModel,
+    ms220_alarm_feature_enabled,
+)
 from .coordinator import MerossBLEConfigEntry, MerossBLEDataUpdateCoordinator
 from .entity import MerossBLEEntity
 
@@ -53,8 +57,10 @@ MS220_CORE_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = 
     ),
 )
 
-# Long door open/closed alarms are optional Meross-app features. BLE has no
-# separate "enabled" flag — create the entity only while the alarm bit is 1.
+# Optional Meross-app alarms (door long open/closed, vibration).
+# New firmware: product_data alarm_enable_map controls entity visibility;
+# alarm_status controls on/off (Problem/OK). Legacy firmware: create on first
+# alarm=1 and keep the entity so Activity/automation history stay valid.
 MS220_OPTIONAL_ALARM_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = (
     MerossBLEBinarySensorEntityDescription(
         key="alarm_door_open_long",
@@ -69,6 +75,13 @@ MS220_OPTIONAL_ALARM_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...]
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_key="alarm_door_closed_long",
+    ),
+    MerossBLEBinarySensorEntityDescription(
+        key="alarm_vibration",
+        translation_key="alarm_vibration",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_key="alarm_vibration",
     ),
 )
 
@@ -121,10 +134,22 @@ async def async_setup_entry(
     if coordinator.model is not MerossModel.MS220:
         return
 
-    # App-optional alarms: BLE only reports the active bit (no enable flag).
-    # Show the entity only while alarm=1; remove again when it clears.
     registry = er.async_get(hass)
     added_alarms: set[str] = set()
+
+    for description in MS220_OPTIONAL_ALARM_SENSORS:
+        unique_id = f"{coordinator.base_unique_id}-{description.key}"
+        entity_id = registry.async_get_entity_id(
+            Platform.BINARY_SENSOR, entry.domain, unique_id
+        )
+        if entity_id is None:
+            continue
+        enabled = ms220_alarm_feature_enabled(description.key, coordinator.device.data)
+        if enabled is None:
+            # Legacy firmware or no advertisement yet — keep registry entries.
+            continue
+        if not enabled:
+            registry.async_remove(entity_id)
 
     @callback
     def _sync_ms220_optional_alarms() -> None:
@@ -134,15 +159,29 @@ async def async_setup_entry(
             entity_id = registry.async_get_entity_id(
                 Platform.BINARY_SENSOR, entry.domain, unique_id
             )
-            active = coordinator.device.data.get(description.value_key) is True
-            if active:
-                if description.key not in added_alarms:
-                    to_add.append(MerossBLEBinarySensor(coordinator, description))
-                    added_alarms.add(description.key)
-            else:
-                if entity_id is not None:
+            enabled = ms220_alarm_feature_enabled(
+                description.key, coordinator.device.data
+            )
+            if enabled is not None:
+                if enabled:
+                    # Registry entries survive restarts; platform entities do not.
+                    if description.key not in added_alarms:
+                        to_add.append(MerossBLEBinarySensor(coordinator, description))
+                        added_alarms.add(description.key)
+                elif entity_id is not None:
                     registry.async_remove(entity_id)
-                added_alarms.discard(description.key)
+                    added_alarms.discard(description.key)
+                continue
+            if description.key in added_alarms:
+                continue
+            if entity_id is not None:
+                to_add.append(MerossBLEBinarySensor(coordinator, description))
+                added_alarms.add(description.key)
+                continue
+            if coordinator.device.data.get(description.value_key) is not True:
+                continue
+            to_add.append(MerossBLEBinarySensor(coordinator, description))
+            added_alarms.add(description.key)
         if to_add:
             async_add_entities(to_add)
 
