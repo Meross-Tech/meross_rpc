@@ -36,6 +36,7 @@ from .const import (
 from .parser import MerossAdvertisement
 from .protocol import (
     HistorySample,
+    build_heartbeat_frame,
     build_humi_history_count_frame,
     build_humi_history_data_frame,
     build_identify_frame,
@@ -194,7 +195,8 @@ class MerossBLEDevice:
         self._device = adv.device
         self._last_adv = adv
         self._last_adv_monotonic = time.monotonic()
-        self._data.update(adv.data)
+        if "status" in adv.data or "alarm_status" in adv.data:
+            self._data.update(adv.data)
         self._data["rssi"] = adv.rssi
 
         if not adv.events:
@@ -298,6 +300,28 @@ class MerossBLEDevice:
         if self._msg_id == 0:
             self._msg_id = 1
         return self._msg_id
+
+    async def async_send_heartbeat(self) -> bool:
+        """Send GATT heartbeat to wake firmware and refresh advertisements."""
+        await self._async_wait_for_connect_window(reason="status sync heartbeat")
+        frame = build_heartbeat_frame(self.subdev_type, self._next_msg_id())
+        _LOGGER.debug(
+            "%s: heartbeat GATT write starting frame=%s",
+            self.address,
+            frame.hex(),
+        )
+        raw = await self._request_raw(frame)
+        if not raw:
+            _LOGGER.debug("%s: heartbeat write done (no notify ACK)", self.address)
+            return True
+        ok = parse_ack_success(raw)
+        _LOGGER.debug(
+            "%s: heartbeat write done ack_ok=%s notify=%s",
+            self.address,
+            ok,
+            raw.hex(),
+        )
+        return ok
 
     async def identify(self) -> bool:
         """Send Identify (beep/flash) over GATT."""

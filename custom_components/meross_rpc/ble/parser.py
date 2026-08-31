@@ -35,6 +35,11 @@ from .const import (
     MODEL_FRIENDLY_NAME,
     MS220_ALARM_DOOR_CLOSED_LONG,
     MS220_ALARM_DOOR_OPEN_LONG,
+    MS220_ALARM_ENABLE_ALL,
+    MS220_ALARM_ENABLE_DOOR_CLOSED_LONG,
+    MS220_ALARM_ENABLE_DOOR_OPEN_LONG,
+    MS220_ALARM_ENABLE_VIBRATION,
+    MS220_ALARM_VIBRATION,
     MS220_STATUS_DOOR_OPEN,
     MS220_STATUS_VIBRATION,
     MS420_STATUS_FREEZE,
@@ -152,6 +157,21 @@ def _parse_ms700_product_data(product_data: bytes, data: dict[str, Any]) -> None
     data["screen_enable"] = product_data[4] & 0x07
 
 
+def _parse_ms220_product_data(product_data: bytes, data: dict[str, Any]) -> None:
+    """MS220: alarm_enable_map at product_data[0] (ms220.md)."""
+    if not product_data:
+        return
+    enable_map = product_data[0] & MS220_ALARM_ENABLE_ALL
+    data["alarm_enable_map"] = enable_map
+    data["alarm_enable_door_open_long"] = bool(
+        enable_map & MS220_ALARM_ENABLE_DOOR_OPEN_LONG
+    )
+    data["alarm_enable_door_closed_long"] = bool(
+        enable_map & MS220_ALARM_ENABLE_DOOR_CLOSED_LONG
+    )
+    data["alarm_enable_vibration"] = bool(enable_map & MS220_ALARM_ENABLE_VIBRATION)
+
+
 def _parse_product_data(
     model: MerossModel, product_data: bytes, data: dict[str, Any]
 ) -> None:
@@ -160,17 +180,19 @@ def _parse_product_data(
         _parse_ms700_product_data(product_data, data)
     elif model is MerossModel.MS120:
         _parse_temp_humidity_product_data(product_data, data)
-    # MS220: no product_data (ms220.md)
+    elif model is MerossModel.MS220:
+        _parse_ms220_product_data(product_data, data)
 
 
 def _parse_ms220_status(status: int, alarm_status: int, data: dict[str, Any]) -> None:
     """Map MS220 status/alarm bitmaps (ms220_ha.md)."""
     data["door_open"] = bool(status & MS220_STATUS_DOOR_OPEN)
-    data["vibration"] = bool(status & MS220_STATUS_VIBRATION)
+    data["vibration"] = bool(alarm_status & MS220_ALARM_VIBRATION)
     data["alarm_door_open_long"] = bool(alarm_status & MS220_ALARM_DOOR_OPEN_LONG)
     data["alarm_door_closed_long"] = bool(
         alarm_status & MS220_ALARM_DOOR_CLOSED_LONG
     )
+    data["alarm_vibration"] = bool(alarm_status & MS220_ALARM_VIBRATION)
 
 
 def _parse_ms420_status(status: int, data: dict[str, Any]) -> None:

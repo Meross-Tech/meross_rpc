@@ -79,11 +79,16 @@ async def async_setup_bluetooth_entry(
     assert entry.unique_id is not None
     address: str = entry.data[CONF_ADDRESS]
     model = MerossModel(entry.data[CONF_MODEL])
-    connectable = True
+    # GATT Identify still needs a connectable BLEDevice from the cache.
+    gatt_connectable = True
+    # False = receive connectable and non-connectable ads. Door/button wake
+    # packets are often flagged non-connectable on macOS; True would drop
+    # them so Opening never updates after the 195s unavailable watchdog.
+    advertisement_connectable = False
     retry_count = entry.options.get(CONF_RETRY_COUNT, DEFAULT_RETRY_COUNT)
 
     ble_device = bluetooth.async_ble_device_from_address(
-        hass, address.upper(), connectable
+        hass, address.upper(), gatt_connectable
     )
     if not ble_device:
         raise ConfigEntryNotReady(
@@ -98,13 +103,13 @@ async def async_setup_bluetooth_entry(
         device,
         entry.unique_id,
         entry.title,
-        connectable,
+        advertisement_connectable,
         model,
         entry,
     )
     device.bind_runtime(
         hass,
-        connectable=connectable,
+        connectable=gatt_connectable,
         gatt_lock=_async_ble_gatt_lock(hass),
         wait_advertisement=coordinator.async_wait_next_advertisement,
     )
