@@ -94,7 +94,7 @@ def _log_temp_sample_audit(address: str, samples: list[HistorySample]) -> None:
         suspicious,
     )
     if suspicious:
-        _LOGGER.warning(
+        _LOGGER.debug(
             "%s: TEMP AUDIT suspicious Celsius range [%s, %s] from firmware history",
             address,
             lo,

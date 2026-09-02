@@ -578,7 +578,7 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
             )
         device = create_device(ble_device, discovery.model)
         await device.identify()
-        LOGGER.info("%s: Identify sent on HA bind (user confirmed)", discovery.address)
+        LOGGER.debug("%s: Identify sent on HA bind (user confirmed)", discovery.address)
 
     def _async_create_ble_entry(
         self, discovery: MerossAdvertisement

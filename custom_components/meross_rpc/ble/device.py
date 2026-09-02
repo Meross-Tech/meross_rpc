@@ -165,7 +165,7 @@ class MerossBLEDevice:
             GATT_ADV_WAIT_TIMEOUT,
         )
         if not await self._wait_advertisement(GATT_ADV_WAIT_TIMEOUT):
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "%s: %s — no advertisement within %.0fs; trying cached BLEDevice",
                 self.address,
                 reason,
@@ -230,8 +230,8 @@ class MerossBLEDevice:
             if prev_seen is not None:
                 seen_gap = (req_id - prev_seen) & 0xFF
                 if 1 < seen_gap <= 128:
-                    _LOGGER.warning(
-                        "%s: BLE MISSED presses — req_id jumped %s → %s "
+                    _LOGGER.debug(
+                        "%s: BLE missed presses — req_id jumped %s → %s "
                         "(gap=%s). Advertisement not delivered to HA.",
                         self.address,
                         prev_seen,
@@ -406,7 +406,7 @@ class MerossBLEDevice:
                 )
             except Exception as err:  # noqa: BLE001
                 last_error = err
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "%s history fetch failed (%s/%s): %s",
                     self.address,
                     attempt,
@@ -533,7 +533,7 @@ class MerossBLEDevice:
                 )
                 page = parse_history_samples(page_raw, data_tag, scale=scale)
                 if not page:
-                    _LOGGER.warning(
+                    _LOGGER.debug(
                         "%s: empty history page %s-%s tag=%#x",
                         self.address,
                         cursor,
@@ -568,7 +568,7 @@ class MerossBLEDevice:
                 return await self._execute_once(frame)
             except Exception as err:  # noqa: BLE001
                 last_error = err
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "%s frame failed (%s/%s): %s",
                     self.address,
                     attempt,

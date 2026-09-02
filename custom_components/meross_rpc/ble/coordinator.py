@@ -22,12 +22,9 @@ from .const import (
     CONNECTABLE_MODELS,
     DEVICE_STARTUP_TIMEOUT,
     GATT_ADV_WAIT_TIMEOUT,
-    MS220_EVENT_BUTTON_DOUBLE,
-    MS220_EVENT_BUTTON_SINGLE,
-    MS220_EVENT_DOORBELL,
     MerossModel,
 )
-from .device import MerossBLEDevice, MerossBLEError
+from .device import MerossBLEDevice
 from .history import async_sync_ms120_history
 from .parser import MerossAdvertisement, parse_advertisement_data
 
@@ -38,149 +35,13 @@ _LOGGER = logging.getLogger(__name__)
 
 type MerossBLEConfigEntry = ConfigEntry[MerossBLEDataUpdateCoordinator]
 
-_LOG_TAG_ROUTINE = "日常---"
-_LOG_TAG_CHANGE = "改变----"
-_LOG_TAG_OFFLINE = "离线----"
-
-
-def _device_log_label(device_name: str, tag: str) -> str:
-    """Device name + Chinese log marker for grep-friendly HA logs."""
-    return f"{device_name} {tag}"
-
-
-_MS220_DOOR_ALARM_LOG_KEYS = (
-    "door_open",
-    "alarm_door_open_long",
-    "alarm_door_closed_long",
-    "alarm_vibration",
-    "alarm_enable_map",
-)
-
-
-def _ms220_field_changed(
-    prev: dict, current: dict, key: str, *, first_only_if_true: bool = False
-) -> bool:
-    if key not in current:
-        return False
-    if not prev:
-        if first_only_if_true:
-            return current.get(key) is True
-        return True
-    return prev.get(key) != current.get(key)
-
-
-def _log_ms220_door_alarm_if_changed(
-    device_name: str, prev: dict, current: dict
-) -> None:
-    """INFO for MS220 door open/close and long-open / long-closed / vibration alarms."""
-    if not any(key in current for key in _MS220_DOOR_ALARM_LOG_KEYS):
-        return
-
-    if _ms220_field_changed(prev, current, "door_open"):
-        door_open = current["door_open"]
-        if door_open is not None:
-            _LOGGER.info(
-                "%s MS220 door %s",
-                _device_log_label(device_name, _LOG_TAG_CHANGE),
-                "open" if door_open else "closed",
-            )
-
-    for key, label in (
-        ("alarm_door_open_long", "open too long"),
-        ("alarm_door_closed_long", "closed too long"),
-        ("alarm_vibration", "vibration"),
-    ):
-        if not _ms220_field_changed(
-            prev, current, key, first_only_if_true=True
-        ):
-            continue
-        active = current.get(key) is True
-        _LOGGER.info(
-            "%s MS220 alarm %s %s (status=0x%x enable_map=0x%x)",
-            _device_log_label(device_name, _LOG_TAG_CHANGE),
-            label,
-            "on" if active else "cleared",
-            current.get("alarm_status", 0),
-            current.get("alarm_enable_map", 0),
-        )
-
-    if _ms220_field_changed(prev, current, "alarm_enable_map"):
-        _LOGGER.debug(
-            "%s MS220 alarm enable_map=0x%x "
-            "enable_open=%s enable_closed=%s enable_vibration=%s",
-            _device_log_label(device_name, _LOG_TAG_CHANGE),
-            current.get("alarm_enable_map", 0),
-            current.get("alarm_enable_door_open_long"),
-            current.get("alarm_enable_door_closed_long"),
-            current.get("alarm_enable_vibration"),
-        )
-
-
-_ENV_LOG_KEYS = ("temperature", "humidity", "battery")
-
-
-def _log_env_if_changed(
-    device_name: str, model: str, prev: dict, current: dict
-) -> None:
-    """INFO when temperature / humidity / battery change (MS120 / MS700 / others)."""
-    parts: list[str] = []
-    for key in _ENV_LOG_KEYS:
-        if key not in current:
-            continue
-        if not prev or prev.get(key) != current.get(key):
-            parts.append(f"{key}={current.get(key)!r}")
-    if not parts:
-        return
-    _LOGGER.info(
-        "%s %s %s",
-        _device_log_label(device_name, _LOG_TAG_CHANGE),
-        model,
-        " ".join(parts),
-    )
-
-
-_MS220_EVENT_LABELS = {
-    MS220_EVENT_DOORBELL: "doorbell",
-    MS220_EVENT_BUTTON_SINGLE: "button single",
-    MS220_EVENT_BUTTON_DOUBLE: "button double",
-}
-
-
-def _log_ms220_events(
-    device_name: str,
-    accepted: list[tuple[int, int]],
-    raw: list[tuple[int, int]],
-) -> None:
-    """INFO for MS220 doorbell / button advertisements."""
-    accepted_ids = {req_id for req_id, _event in accepted}
-    for req_id, event_code in accepted:
-        label = _MS220_EVENT_LABELS.get(event_code, f"event={event_code:#x}")
-        _LOGGER.info(
-            "%s MS220 %s (req_id=%s)",
-            _device_log_label(device_name, _LOG_TAG_CHANGE),
-            label,
-            req_id,
-        )
-    for req_id, event_code in raw:
-        if req_id in accepted_ids:
-            continue
-        if event_code not in _MS220_EVENT_LABELS:
-            continue
-        _LOGGER.debug(
-            "%s MS220 %s ignored sticky/rebroadcast (req_id=%s)",
-            _device_log_label(device_name, _LOG_TAG_ROUTINE),
-            _MS220_EVENT_LABELS[event_code],
-            req_id,
-        )
-
-
 # While unavailable, dump HA bluetooth-manager cache this often.
 # Callbacks may never fire; the cache still shows last_seen.
 _UNAVAILABLE_ADV_PROBE_SECONDS = 10.0
 
 
 def _format_parsed_packet(adv: MerossAdvertisement, raw_hex: str) -> str:
-    """Parsed 0xBE30 payload for INFO logs (all models)."""
+    """Parsed 0xBE30 payload for debug logs (all models)."""
     skip = {"model", "modelName", "modelFriendlyName", "address", "rssi"}
     fields = {key: value for key, value in adv.data.items() if key not in skip}
     adv_seq = adv.data.get("adv_seq")
@@ -415,8 +276,8 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         self._available = False
         self._was_unavailable = True
         _LOGGER.info(
-            "%s %s no parseable BLE advertisement for %ss → marking unavailable",
-            _device_log_label(self.device_name, _LOG_TAG_OFFLINE),
+            "%s: %s no parseable BLE advertisement for %ss, marking unavailable",
+            self.device_name,
             self.model.value.upper(),
             ADVERTISEMENT_STALE_SECONDS,
         )
@@ -492,12 +353,10 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
             service_info.device, service_info.advertisement, self.model
         )
         if not adv or "status" not in adv.data:
-            log_fn = _LOGGER.info if recovered else _LOGGER.debug
-            tag = _LOG_TAG_CHANGE if recovered else _LOG_TAG_ROUTINE
-            log_fn(
-                "%s %s advertisement (%s) could not be parsed "
+            _LOGGER.debug(
+                "%s: %s advertisement (%s) could not be parsed "
                 "(no 0xBE30 status; service_data=%s)",
-                _device_log_label(self.device_name, tag),
+                self.device_name,
                 self.model.value.upper(),
                 path,
                 raw_hex,
@@ -507,26 +366,32 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         changed = self.device.advertisement_changed(adv)
         new_events = self.device.update_from_advertisement(adv)
         parsed_txt = _format_parsed_packet(adv, raw_hex)
-        if recovered:
+        if recovered and self._ready_event.is_set():
             _LOGGER.info(
-                "%s %s recovered %s",
-                _device_log_label(self.device_name, _LOG_TAG_CHANGE),
+                "%s: %s BLE advertisement resumed",
+                self.device_name,
+                self.model.value.upper(),
+            )
+        if recovered:
+            _LOGGER.debug(
+                "%s: %s recovered %s",
+                service_info.address,
                 self.model.value.upper(),
                 parsed_txt,
             )
         elif changed or new_events:
-            _LOGGER.info(
-                "%s %s diff=%s events=%s %s",
-                _device_log_label(self.device_name, _LOG_TAG_CHANGE),
+            _LOGGER.debug(
+                "%s: %s diff=%s events=%s %s",
+                service_info.address,
                 self.model.value.upper(),
                 _summarize_data_changes(prev_data, adv.data),
                 new_events,
                 parsed_txt,
             )
         else:
-            _LOGGER.info(
-                "%s %s %s",
-                _device_log_label(self.device_name, _LOG_TAG_ROUTINE),
+            _LOGGER.debug(
+                "%s: %s %s",
+                service_info.address,
                 self.model.value.upper(),
                 parsed_txt,
             )
@@ -537,12 +402,6 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         self._last_parseable_monotonic = time.monotonic()
         self._async_schedule_stale_timer()
         self._async_notify_advertisement_waiters()
-        if self.model is MerossModel.MS220:
-            _log_ms220_door_alarm_if_changed(self.device_name, prev_data, adv.data)
-            _log_ms220_events(self.device_name, new_events, adv.events)
-        _log_env_if_changed(
-            self.device_name, self.model.value.upper(), prev_data, adv.data
-        )
         self.last_new_events = new_events
         if recovered:
             self._was_unavailable = False
