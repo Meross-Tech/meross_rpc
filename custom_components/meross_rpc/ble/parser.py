@@ -41,7 +41,6 @@ from .const import (
     MS220_ALARM_ENABLE_VIBRATION,
     MS220_ALARM_VIBRATION,
     MS220_STATUS_DOOR_OPEN,
-    MS220_STATUS_VIBRATION,
     MS420_STATUS_FREEZE,
     MS420_STATUS_RAIN,
     MS420_STATUS_WATER_LEAK,
@@ -187,7 +186,6 @@ def _parse_product_data(
 def _parse_ms220_status(status: int, alarm_status: int, data: dict[str, Any]) -> None:
     """Map MS220 status/alarm bitmaps (ms220_ha.md)."""
     data["door_open"] = bool(status & MS220_STATUS_DOOR_OPEN)
-    data["vibration"] = bool(alarm_status & MS220_ALARM_VIBRATION)
     data["alarm_door_open_long"] = bool(alarm_status & MS220_ALARM_DOOR_OPEN_LONG)
     data["alarm_door_closed_long"] = bool(
         alarm_status & MS220_ALARM_DOOR_CLOSED_LONG

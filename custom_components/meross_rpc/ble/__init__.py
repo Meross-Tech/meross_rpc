@@ -35,13 +35,14 @@ def _async_ble_gatt_lock(hass: HomeAssistant) -> asyncio.Lock:
 
 
 def _async_remove_legacy_ble_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Drop retired BLE entities (Identify button, Bluetooth signal)."""
+    """Drop retired BLE entities (Identify, RSSI, MS220 vibration status)."""
     if entry.unique_id is None:
         return
     registry = er.async_get(hass)
     for domain, unique_suffix in (
         (Platform.BUTTON, "identify"),
         (Platform.SENSOR, "rssi"),
+        (Platform.BINARY_SENSOR, "vibration"),
     ):
         entity_id = registry.async_get_entity_id(
             domain, entry.domain, f"{entry.unique_id}-{unique_suffix}"
