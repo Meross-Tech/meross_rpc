@@ -164,7 +164,7 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         self._was_unavailable = True
         self._history_lock = asyncio.Lock()
         self._history_task: asyncio.Task[None] | None = None
-        # After BLE unavailable, re-pull full firmware buffer (ring buffer may wrap).
+        # Setup / reload: re-pull full firmware buffer (ring buffer may wrap).
         self.history_force_full_resync = False
         # Instantaneous events from the latest advertisement (after dedup)
         self.last_new_events: list[tuple[int, int]] = []
@@ -407,17 +407,10 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
             self._was_unavailable = False
             self._async_cancel_unavailable_adv_probe()
         super()._async_handle_bluetooth_event(service_info, change)
-        if recovered and self.model is MerossModel.MS120:
-            _LOGGER.debug(
-                "%s: recovered from unavailable → scheduling history sync",
-                self.ble_device.address,
-            )
-            self.history_force_full_resync = True
-            self.async_schedule_history_sync()
 
     @callback
     def async_schedule_history_sync(self) -> None:
-        """Schedule MS120 local history import (setup / reconnect)."""
+        """Schedule MS120 local history import (setup / reload)."""
         if self.model is not MerossModel.MS120:
             return
         if self._history_task and not self._history_task.done():

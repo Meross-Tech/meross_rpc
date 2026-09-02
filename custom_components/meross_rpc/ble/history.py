@@ -205,9 +205,9 @@ async def async_sync_ms120_history(
 ) -> None:
     """Pull missing MS120 history over GATT and import into HA statistics.
 
-    When HA has a local gap (device was unavailable), re-read the full firmware
-    buffer and import any samples newer than the last imported timestamp. This
-    covers ring buffers where his_num stays flat but indices are reused.
+    Called on integration setup / reload. Re-read the full firmware buffer and
+    import samples newer than the last imported timestamp so ring-buffer wrap
+    (his_num stays flat, indices reused) does not skip data.
     """
     if coordinator.model is not MerossModel.MS120:
         return
