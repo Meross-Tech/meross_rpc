@@ -23,7 +23,7 @@ from .const import (
     CONF_TEMP_HISTORY_NEXT_IDX,
     MerossModel,
 )
-from .device import MerossBLEError
+from .device import MerossBLEError, MerossBLEHistoryYield
 from .protocol import HistorySample
 
 if TYPE_CHECKING:
@@ -203,11 +203,10 @@ def _import_series(
 async def async_sync_ms120_history(
     hass: HomeAssistant, coordinator: MerossBLEDataUpdateCoordinator
 ) -> None:
-    """Pull missing MS120 history over GATT and import into HA statistics.
+    """Pull MS120 history over GATT and import into HA statistics.
 
-    When HA has a local gap (device was unavailable), re-read the full firmware
-    buffer and import any samples newer than the last imported timestamp. This
-    covers ring buffers where his_num stays flat but indices are reused.
+    Only scheduled from integration setup/reload (full firmware buffer).
+    Recovery from unavailable does not trigger another pull.
     """
     if coordinator.model is not MerossModel.MS120:
         return
@@ -237,6 +236,12 @@ async def async_sync_ms120_history(
     try:
         temp_all = await coordinator.device.fetch_temperature_history(temp_next)
         humi_all = await coordinator.device.fetch_humidity_history(humi_next)
+    except MerossBLEHistoryYield:
+        # Keep force_full if we had not finished; Identify gets the slot now.
+        if force_full:
+            coordinator.history_force_full_resync = True
+        coordinator.async_schedule_history_sync_after_yield()
+        return
     except MerossBLEError as err:
         _LOGGER.warning(
             "%s: MS120 history sync failed: %s", coordinator.ble_device.address, err

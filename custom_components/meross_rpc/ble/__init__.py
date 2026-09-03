@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, Platform
@@ -15,23 +13,24 @@ from ..const import DOMAIN
 from .const import (
     CONF_MODEL,
     CONF_RETRY_COUNT,
-    DATA_BLE_GATT_LOCK,
+    DATA_BLE_GATT_GATE,
     DEFAULT_RETRY_COUNT,
     LOGGER,
     MerossModel,
 )
 from .coordinator import MerossBLEDataUpdateCoordinator
 from .device import create_device
+from .gatt import MerossBleGattGate
 
 
-def _async_ble_gatt_lock(hass: HomeAssistant) -> asyncio.Lock:
-    """One shared GATT lock for all Meross BLE devices on this HA instance."""
+def async_get_ble_gatt_gate(hass: HomeAssistant) -> MerossBleGattGate:
+    """Shared GATT gate: Identify preempts MS120 history on one adapter slot."""
     store = hass.data.setdefault(DOMAIN, {})
-    lock = store.get(DATA_BLE_GATT_LOCK)
-    if lock is None:
-        lock = asyncio.Lock()
-        store[DATA_BLE_GATT_LOCK] = lock
-    return lock
+    gate = store.get(DATA_BLE_GATT_GATE)
+    if gate is None:
+        gate = MerossBleGattGate()
+        store[DATA_BLE_GATT_GATE] = gate
+    return gate
 
 
 def _async_remove_legacy_ble_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -42,6 +41,7 @@ def _async_remove_legacy_ble_entities(hass: HomeAssistant, entry: ConfigEntry) -
     for domain, unique_suffix in (
         (Platform.BUTTON, "identify"),
         (Platform.SENSOR, "rssi"),
+        (Platform.BINARY_SENSOR, "vibration"),
     ):
         entity_id = registry.async_get_entity_id(
             domain, entry.domain, f"{entry.unique_id}-{unique_suffix}"
@@ -110,7 +110,7 @@ async def async_setup_bluetooth_entry(
     device.bind_runtime(
         hass,
         connectable=gatt_connectable,
-        gatt_lock=_async_ble_gatt_lock(hass),
+        gatt_gate=async_get_ble_gatt_gate(hass),
         wait_advertisement=coordinator.async_wait_next_advertisement,
     )
     entry.async_on_unload(coordinator.async_start())
@@ -125,7 +125,7 @@ async def async_setup_bluetooth_entry(
     )
     _async_remove_legacy_ble_entities(hass, entry)
     if model is MerossModel.MS120:
-        # Setup / reload: ask firmware for anything newer than last import.
+        # Setup / reload only: full firmware history buffer → HA statistics.
         coordinator.history_force_full_resync = True
         coordinator.async_schedule_history_sync()
     return True

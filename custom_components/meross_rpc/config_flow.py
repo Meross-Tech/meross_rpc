@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import time
 from typing import Any
 
 from aiorefoss.common import (
@@ -22,8 +23,10 @@ import voluptuous as vol
 
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
+    BluetoothScanningMode,
     BluetoothServiceInfoBleak,
     async_discovered_service_info,
+    async_process_advertisements,
 )
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -42,15 +45,19 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
+from .ble import async_get_ble_gatt_gate
 from .ble.const import (
     CONF_BOUND_IDENTIFY_DONE,
     CONF_MODEL,
     CONF_RETRY_COUNT,
     DEFAULT_RETRY_COUNT,
+    GATT_BIND_ADV_WAIT_SECONDS,
+    GATT_FRESH_ADV_SECONDS,
     MODEL_FRIENDLY_NAME,
     MerossModel,
 )
 from .ble.device import MerossBLEError, create_device
+from .ble.gatt import MerossBleGattGate
 from .ble.parser import MerossAdvertisement, parse_advertisement_data
 from .const import (
     CONF_CONNECTION,
@@ -99,6 +106,33 @@ def _collect_discovered_service_info(
             seen.add(info.address)
             results.append(info)
     return results
+
+
+def _parse_bind_advertisement(
+    service_info: BluetoothServiceInfoBleak, model: MerossModel
+) -> MerossAdvertisement | None:
+    adv = parse_advertisement_data(
+        service_info.device, service_info.advertisement, model
+    )
+    if adv and "status" in adv.data:
+        return adv
+    return None
+
+
+async def _async_wait_bind_advertisement(
+    hass: HomeAssistant, discovery: MerossAdvertisement, timeout: float
+) -> BluetoothServiceInfoBleak | None:
+    """Wait for a live parseable advertisement before the bind GATT connect."""
+    try:
+        return await async_process_advertisements(
+            hass,
+            lambda info: _parse_bind_advertisement(info, discovery.model) is not None,
+            {"address": discovery.address},
+            BluetoothScanningMode.ACTIVE,
+            int(timeout),
+        )
+    except TimeoutError:
+        return None
 
 
 async def async_validate_input(
@@ -569,15 +603,64 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _async_bind_identify(self, discovery: MerossAdvertisement) -> None:
         """GATT Identify once when the user confirms adding the device."""
-        ble_device = bluetooth.async_ble_device_from_address(
-            self.hass, discovery.address.upper(), connectable=True
+        gate = async_get_ble_gatt_gate(self.hass)
+        async with gate.identify_claim():
+            await self._async_bind_identify_claimed(discovery, gate)
+
+    async def _async_bind_identify_claimed(
+        self, discovery: MerossAdvertisement, gate: MerossBleGattGate
+    ) -> None:
+        """Wait for ads then Identify; Identify claim is already held."""
+        # macOS keeps advertisements in cache forever; only skip the wait
+        # when HA heard a parseable packet in the last few seconds.
+        service_info = bluetooth.async_last_service_info(
+            self.hass, discovery.address, connectable=False
         )
+        cache_fresh = (
+            service_info is not None
+            and _parse_bind_advertisement(service_info, discovery.model) is not None
+            and (time.monotonic() - service_info.time) <= GATT_FRESH_ADV_SECONDS
+        )
+        if not cache_fresh:
+            service_info = await _async_wait_bind_advertisement(
+                self.hass, discovery, GATT_BIND_ADV_WAIT_SECONDS
+            )
+        if service_info is None:
+            LOGGER.warning(
+                "%s: no parseable advertisement within %ss before Identify; "
+                "trying GATT anyway",
+                discovery.address,
+                GATT_BIND_ADV_WAIT_SECONDS,
+            )
+            ble_device = bluetooth.async_ble_device_from_address(
+                self.hass, discovery.address.upper(), connectable=True
+            )
+        else:
+            ble_device = service_info.device
+
         if not ble_device:
             raise MerossBLEError(
                 f"Could not find Meross BLE device with address {discovery.address}"
             )
+
+        async def _wait_advertisement(timeout: float) -> bool:
+            return (
+                await _async_wait_bind_advertisement(self.hass, discovery, timeout)
+                is not None
+            )
+
         device = create_device(ble_device, discovery.model)
-        await device.identify()
+        device.bind_runtime(
+            self.hass,
+            connectable=True,
+            gatt_gate=gate,
+            wait_advertisement=_wait_advertisement,
+        )
+        if service_info is not None:
+            adv = _parse_bind_advertisement(service_info, discovery.model)
+            if adv is not None:
+                device.update_from_advertisement(adv)
+        await device.async_identify_claimed()
         LOGGER.info("%s: Identify sent on HA bind (user confirmed)", discovery.address)
 
     def _async_create_ble_entry(
