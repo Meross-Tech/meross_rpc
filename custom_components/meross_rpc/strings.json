@@ -1,6 +1,6 @@
 {
   "config": {
-    "flow_title": "{name}",
+    "flow_title": "{name} ({address})",
     "step": {
       "user": {
         "title": "Meross",
@@ -61,7 +61,7 @@
       },
       "bluetooth_confirm": {
         "title": "Meross Bluetooth",
-        "description": "Do you want to set up {name}?"
+        "description": "Do you want to set up {name} ({address})?"
       },
       "init": {
         "title": "Meross Bluetooth options",

@@ -72,19 +72,21 @@ def _format_ble_unique_id(address: str) -> str:
     return address.replace(":", "").replace("-", "").lower()
 
 
-def _short_address(address: str) -> str:
-    parts = address.replace("-", ":").split(":")
-    return f"{parts[-2].upper()}{parts[-1].upper()}"[-4:]
-
-
 def _name_from_discovery(discovery: MerossAdvertisement) -> str:
-    """Config entry / confirm title (no MAC suffix)."""
+    """Config entry title (no MAC suffix)."""
     return discovery.friendly_name
 
 
 def _label_from_discovery(discovery: MerossAdvertisement) -> str:
-    """Picker label; include full address when choosing among several devices."""
+    """Picker / confirm label: model name plus full MAC."""
     return f"{discovery.friendly_name} ({discovery.address})"
+
+
+def _discovery_title_placeholders(discovery: MerossAdvertisement) -> dict[str, str]:
+    return {
+        "name": discovery.friendly_name,
+        "address": discovery.address,
+    }
 
 
 def _collect_discovered_service_info(
@@ -462,10 +464,7 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="not_supported")
 
         self._discovered = parsed
-        self.context["title_placeholders"] = {
-            "name": parsed.friendly_name,
-            "address": _short_address(discovery_info.address),
-        }
+        self.context["title_placeholders"] = _discovery_title_placeholders(parsed)
         return await self.async_step_bluetooth_confirm()
 
     async def async_step_bluetooth_setup(
@@ -486,6 +485,9 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             self._abort_if_unique_id_configured()
             self._discovered = discovery
+            self.context["title_placeholders"] = _discovery_title_placeholders(
+                discovery
+            )
             return await self.async_step_bluetooth_confirm()
 
         await bluetooth.async_request_active_scan(self.hass, MANUAL_SCAN_DURATION)
@@ -522,6 +524,9 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             self._abort_if_unique_id_configured()
             self._discovered = discovery
+            self.context["title_placeholders"] = _discovery_title_placeholders(
+                discovery
+            )
             return await self.async_step_bluetooth_confirm()
 
         return self.async_show_form(
@@ -561,9 +566,7 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
         self._set_confirm_only()
         return self.async_show_form(
             step_id="bluetooth_confirm",
-            description_placeholders={
-                "name": _name_from_discovery(self._discovered),
-            },
+            description_placeholders=_discovery_title_placeholders(self._discovered),
             errors=errors,
         )
 

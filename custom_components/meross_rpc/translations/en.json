@@ -18,7 +18,7 @@
       "mac_address_mismatch": "The MAC address of the device does not match the one in the configuration, please reboot the device and try again.",
       "identify_failed": "Could not connect to send Identify. Bring the device closer and try again."
     },
-    "flow_title": "{name}",
+    "flow_title": "{name} ({address})",
     "step": {
       "user": {
         "title": "Meross",
@@ -79,7 +79,7 @@
       },
       "bluetooth_confirm": {
         "title": "Meross Bluetooth",
-        "description": "Do you want to set up {name}?"
+        "description": "Do you want to set up {name} ({address})?"
       },
       "init": {
         "title": "Meross Bluetooth options",
