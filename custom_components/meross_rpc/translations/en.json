@@ -16,7 +16,7 @@
       "firmware_not_fully_supported": "Device not fully supported. Please contact Meross support",
       "invalid_auth": "Invalid authentication",
       "mac_address_mismatch": "The MAC address of the device does not match the one in the configuration, please reboot the device and try again.",
-      "identify_failed": "Could not connect to send Identify. Bring the device closer and try again."
+      "identify_failed": "Identify failed. The device must respond on GATT notify after receiving the command. Bring it closer and try again."
     },
     "flow_title": "{name}",
     "step": {

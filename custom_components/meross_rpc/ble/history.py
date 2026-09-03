@@ -23,7 +23,7 @@ from .const import (
     CONF_TEMP_HISTORY_NEXT_IDX,
     MerossModel,
 )
-from .device import MerossBLEError
+from .device import MerossBLEError, MerossBLEHistoryYield
 from .protocol import HistorySample
 
 if TYPE_CHECKING:
@@ -94,7 +94,7 @@ def _log_temp_sample_audit(address: str, samples: list[HistorySample]) -> None:
         suspicious,
     )
     if suspicious:
-        _LOGGER.debug(
+        _LOGGER.warning(
             "%s: TEMP AUDIT suspicious Celsius range [%s, %s] from firmware history",
             address,
             lo,
@@ -203,11 +203,10 @@ def _import_series(
 async def async_sync_ms120_history(
     hass: HomeAssistant, coordinator: MerossBLEDataUpdateCoordinator
 ) -> None:
-    """Pull missing MS120 history over GATT and import into HA statistics.
+    """Pull MS120 history over GATT and import into HA statistics.
 
-    Called on integration setup / reload. Re-read the full firmware buffer and
-    import samples newer than the last imported timestamp so ring-buffer wrap
-    (his_num stays flat, indices reused) does not skip data.
+    Only scheduled from integration setup/reload (full firmware buffer).
+    Recovery from unavailable does not trigger another pull.
     """
     if coordinator.model is not MerossModel.MS120:
         return
@@ -237,6 +236,12 @@ async def async_sync_ms120_history(
     try:
         temp_all = await coordinator.device.fetch_temperature_history(temp_next)
         humi_all = await coordinator.device.fetch_humidity_history(humi_next)
+    except MerossBLEHistoryYield:
+        # Keep force_full if we had not finished; Identify gets the slot now.
+        if force_full:
+            coordinator.history_force_full_resync = True
+        coordinator.async_schedule_history_sync_after_yield()
+        return
     except MerossBLEError as err:
         _LOGGER.warning(
             "%s: MS120 history sync failed: %s", coordinator.ble_device.address, err
