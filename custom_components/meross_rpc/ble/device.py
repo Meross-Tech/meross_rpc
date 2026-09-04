@@ -25,6 +25,7 @@ from .const import (
     HISTORY_PAGE_SIZE,
     MEROSS_CHAR_NOTIFY,
     MEROSS_CHAR_WRITE,
+    MEROSS_GATT_SERVICE,
     MODEL_TO_SUBDEV,
     TAG_HUMI_HISTORY_COUNT,
     TAG_HUMI_HISTORY_DATA,
@@ -49,6 +50,26 @@ from .protocol import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+_LOG_SVC = "[SVC-DISCOVER]"
+_LOG_SVC_FAIL = "[SVC-DISCOVER-FAIL]"
+_LOG_NOTIFY = "[START-NOTIFY]"
+_LOG_CACHE = "[CACHE]"
+
+
+def _short_repr(value: Any, limit: int = 400) -> str:
+    text = repr(value)
+    if len(text) > limit:
+        return text[:limit] + "..."
+    return text
+
+
+def _uuid_key(value: object) -> str:
+    return str(value).lower().replace("-", "")
+
+
+def _char_matches(char: Any, expected: str) -> bool:
+    return _uuid_key(getattr(char, "uuid", char)) == _uuid_key(expected)
 
 
 class MerossBLEError(Exception):
@@ -139,6 +160,180 @@ class MerossBLEDevice:
             "InProgress" in text
             or "connection slot" in text.lower()
             or "out of connection slots" in text.lower()
+        )
+
+    def _log_ha_ble_cache(self, reason: str) -> None:
+        """Dump HA bluetooth-manager cache and the BLEDevice about to be used."""
+        device = self._device
+        _LOGGER.info(
+            "%s %s %s using BLEDevice name=%r rssi=%s details=%s",
+            self.address,
+            _LOG_CACHE,
+            reason,
+            device.name,
+            getattr(device, "rssi", None),
+            _short_repr(getattr(device, "details", None)),
+        )
+        if self._hass is None:
+            _LOGGER.info(
+                "%s %s HA manager unavailable (no hass; bind path)",
+                self.address,
+                _LOG_CACHE,
+            )
+            return
+        for connectable in (True, False):
+            info = bluetooth.async_last_service_info(
+                self._hass, self.address, connectable=connectable
+            )
+            ble = bluetooth.async_ble_device_from_address(
+                self._hass, self.address.upper(), connectable
+            )
+            if info is None:
+                _LOGGER.info(
+                    "%s %s HA last_service_info connectable=%s empty "
+                    "ble_device=%s",
+                    self.address,
+                    _LOG_CACHE,
+                    connectable,
+                    _short_repr(ble),
+                )
+                continue
+            age = time.monotonic() - info.time
+            adv = info.advertisement
+            service_data = {
+                str(key): bytes(value).hex()
+                for key, value in (adv.service_data or {}).items()
+            }
+            _LOGGER.info(
+                "%s %s HA last_service_info connectable=%s age=%.1fs "
+                "name=%r rssi=%s adv_connectable=%s service_uuids=%s "
+                "service_data=%s ble_device_name=%r",
+                self.address,
+                _LOG_CACHE,
+                connectable,
+                age,
+                info.name,
+                info.rssi,
+                info.connectable,
+                list(adv.service_uuids or []),
+                service_data or "(none)",
+                None if ble is None else ble.name,
+            )
+
+    def _log_gatt_discovery(self, client: BleakClientWithServiceCache) -> None:
+        """Log GATT services after connect; mark FAIL if Meross chars are missing."""
+        cached = getattr(client, "_cached_services", None)
+        try:
+            services = client.services
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "%s %s cannot read services cached=%s: %s",
+                self.address,
+                _LOG_SVC_FAIL,
+                cached is not None,
+                err,
+            )
+            return
+        if not services:
+            _LOGGER.warning(
+                "%s %s empty services (cache_hit=%s client=%s)",
+                self.address,
+                _LOG_SVC_FAIL,
+                cached is not None,
+                type(client).__name__,
+            )
+            return
+
+        has_service = False
+        has_write = False
+        has_notify = False
+        chars: list[str] = []
+        service_count = 0
+        for service in services:
+            service_count += 1
+            if _uuid_key(service.uuid) == _uuid_key(MEROSS_GATT_SERVICE):
+                has_service = True
+            for char in service.characteristics:
+                props = ",".join(char.properties)
+                chars.append(f"{char.uuid}[{props}]")
+                if _char_matches(char, MEROSS_CHAR_WRITE):
+                    has_write = True
+                if _char_matches(char, MEROSS_CHAR_NOTIFY):
+                    has_notify = True
+
+        _LOGGER.info(
+            "%s %s cache_hit=%s meross_svc=%s write=%s notify=%s "
+            "service_count=%s chars=%s",
+            self.address,
+            _LOG_SVC,
+            cached is not None,
+            has_service,
+            has_write,
+            has_notify,
+            service_count,
+            chars,
+        )
+        if not has_service or not has_write or not has_notify:
+            _LOGGER.warning(
+                "%s %s missing meross_svc=%s write=%s notify=%s "
+                "expected svc=%s write=%s notify=%s",
+                self.address,
+                _LOG_SVC_FAIL,
+                has_service,
+                has_write,
+                has_notify,
+                MEROSS_GATT_SERVICE,
+                MEROSS_CHAR_WRITE,
+                MEROSS_CHAR_NOTIFY,
+            )
+
+    async def _async_establish_connection(self) -> BleakClientWithServiceCache:
+        self._log_ha_ble_cache("before GATT connect")
+        try:
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                self._device,
+                self.name,
+                max_attempts=1,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "%s %s establish_connection failed: %s",
+                self.address,
+                _LOG_SVC_FAIL,
+                err,
+            )
+            raise
+        self._log_gatt_discovery(client)
+        return client
+
+    async def _async_start_notify(
+        self,
+        client: BleakClientWithServiceCache,
+        callback: Callable[[int, bytearray], None],
+    ) -> None:
+        _LOGGER.info(
+            "%s %s subscribing char=%s",
+            self.address,
+            _LOG_NOTIFY,
+            MEROSS_CHAR_NOTIFY,
+        )
+        try:
+            await client.start_notify(MEROSS_CHAR_NOTIFY, callback)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "%s %s FAIL char=%s: %s",
+                self.address,
+                _LOG_NOTIFY,
+                MEROSS_CHAR_NOTIFY,
+                err,
+            )
+            raise
+        _LOGGER.info(
+            "%s %s OK char=%s",
+            self.address,
+            _LOG_NOTIFY,
+            MEROSS_CHAR_NOTIFY,
         )
 
     def _adv_is_fresh(self) -> bool:
@@ -429,12 +624,7 @@ class MerossBLEDevice:
         scale: float,
         start_idx: int,
     ) -> list[HistorySample]:
-        client = await establish_connection(
-            BleakClientWithServiceCache,
-            self._device,
-            self.name,
-            max_attempts=1,
-        )
+        client = await self._async_establish_connection()
         notify = asyncio.Event()
         payload_box: dict[str, bytes] = {}
 
@@ -444,7 +634,7 @@ class MerossBLEDevice:
 
         samples: list[HistorySample] = []
         try:
-            await client.start_notify(MEROSS_CHAR_NOTIFY, _on_notify)
+            await self._async_start_notify(client, _on_notify)
             # Give CCCD enable time before first write (CoreBluetooth often needs this).
             await asyncio.sleep(0.5)
 
@@ -582,12 +772,7 @@ class MerossBLEDevice:
         return b""
 
     async def _execute_once(self, frame: bytes) -> bytes:
-        client = await establish_connection(
-            BleakClientWithServiceCache,
-            self._device,
-            self.name,
-            max_attempts=1,
-        )
+        client = await self._async_establish_connection()
         notify = asyncio.Event()
         payload_box: dict[str, bytes] = {}
 
@@ -596,7 +781,7 @@ class MerossBLEDevice:
             notify.set()
 
         try:
-            await client.start_notify(MEROSS_CHAR_NOTIFY, _on_notify)
+            await self._async_start_notify(client, _on_notify)
             return await self._exchange(
                 client, notify, payload_box, lambda: frame
             )
