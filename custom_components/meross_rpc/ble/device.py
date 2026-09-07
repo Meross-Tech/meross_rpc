@@ -22,6 +22,7 @@ from .const import (
     GATT_ADV_WAIT_TIMEOUT,
     GATT_FRESH_ADV_SECONDS,
     GATT_INPROGRESS_COOLDOWN,
+    GATT_NOTIFY_TIMEOUT,
     HISTORY_PAGE_SIZE,
     MEROSS_CHAR_NOTIFY,
     MEROSS_CHAR_WRITE,
@@ -55,6 +56,7 @@ _LOG_SVC = "[SVC-DISCOVER]"
 _LOG_SVC_FAIL = "[SVC-DISCOVER-FAIL]"
 _LOG_NOTIFY = "[START-NOTIFY]"
 _LOG_CACHE = "[CACHE]"
+_LOG_TIMEOUT = "[超时----]"
 
 
 def _short_repr(value: Any, limit: int = 400) -> str:
@@ -651,7 +653,7 @@ class MerossBLEDevice:
                 payload_box,
                 lambda frame=count_frame: frame,
                 write_with_response=False,
-                timeout=10.0,
+                timeout=GATT_NOTIFY_TIMEOUT,
             )
             _LOGGER.debug(
                 "%s: history COUNT notify tag=%#x raw=%s",
@@ -711,7 +713,7 @@ class MerossBLEDevice:
                     payload_box,
                     lambda frame=data_frame: frame,
                     write_with_response=False,
-                    timeout=10.0,
+                    timeout=GATT_NOTIFY_TIMEOUT,
                 )
                 _LOGGER.debug(
                     "%s: history DATA notify tag=%#x idx=%s-%s raw_len=%s",
@@ -798,11 +800,18 @@ class MerossBLEDevice:
         frame_factory: Callable[[], bytes],
         *,
         write_with_response: bool = True,
-        timeout: float = 5.0,
+        timeout: float = GATT_NOTIFY_TIMEOUT,
     ) -> bytes:
         notify.clear()
         payload_box.pop("data", None)
         frame = frame_factory()
+        _LOGGER.info(
+            "%s %s 等待Notify应答 timeout=%.1fs frame=%s",
+            self.address,
+            _LOG_TIMEOUT,
+            timeout,
+            frame.hex(),
+        )
         await client.write_gatt_char(
             MEROSS_CHAR_WRITE, frame, response=write_with_response
         )
@@ -810,13 +819,20 @@ class MerossBLEDevice:
             async with asyncio.timeout(timeout):
                 await notify.wait()
         except TimeoutError:
-            _LOGGER.debug(
-                "%s: no notify within %.1fs for frame %s",
+            _LOGGER.warning(
+                "%s %s Notify应答超时 timeout=%.1fs frame=%s",
                 self.address,
+                _LOG_TIMEOUT,
                 timeout,
                 frame.hex(),
             )
             return b""
+        _LOGGER.info(
+            "%s %s Notify应答成功 timeout=%.1fs",
+            self.address,
+            _LOG_TIMEOUT,
+            timeout,
+        )
         return payload_box.get("data", b"")
 
 

@@ -29,6 +29,10 @@ GATT_ADV_WAIT_TIMEOUT = 35.0
 GATT_FRESH_ADV_SECONDS = 5.0
 # BlueZ needs a moment to clear InProgress / free the slot before another connect.
 GATT_INPROGRESS_COOLDOWN = 2.0
+# Wait for GATT Notify ACK after write (Identify / control / history pages).
+# BlueZ may update connection parameters right after connect; a short wait
+# was timing out before the firmware ACK arrived.
+GATT_NOTIFY_TIMEOUT = 10.0
 
 # ---------------------------------------------------------------------------
 # Discovery / advertisement (ble_ha.md)
