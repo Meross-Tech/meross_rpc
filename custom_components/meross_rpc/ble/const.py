@@ -33,6 +33,10 @@ GATT_INPROGRESS_COOLDOWN = 2.0
 # BlueZ may update connection parameters right after connect; a short wait
 # was timing out before the firmware ACK arrived.
 GATT_NOTIFY_TIMEOUT = 10.0
+# After connect, wait before using the GATT table / start_notify.
+# BlueZ often updates connection parameters immediately; discovering or
+# subscribing during that retiming can yield an incomplete char list.
+GATT_POST_CONNECT_SETTLE = 1.0
 
 # ---------------------------------------------------------------------------
 # Discovery / advertisement (ble_ha.md)

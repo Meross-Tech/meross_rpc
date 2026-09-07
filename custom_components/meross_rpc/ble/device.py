@@ -12,6 +12,7 @@ from typing import Any
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import (
     BleakClientWithServiceCache,
+    clear_cache,
     establish_connection,
 )
 from homeassistant.components import bluetooth
@@ -23,6 +24,7 @@ from .const import (
     GATT_FRESH_ADV_SECONDS,
     GATT_INPROGRESS_COOLDOWN,
     GATT_NOTIFY_TIMEOUT,
+    GATT_POST_CONNECT_SETTLE,
     HISTORY_PAGE_SIZE,
     MEROSS_CHAR_NOTIFY,
     MEROSS_CHAR_WRITE,
@@ -57,6 +59,8 @@ _LOG_SVC_FAIL = "[SVC-DISCOVER-FAIL]"
 _LOG_NOTIFY = "[START-NOTIFY]"
 _LOG_CACHE = "[CACHE]"
 _LOG_TIMEOUT = "[超时----]"
+_LOG_SETTLE = "[连接稳定]"
+_LOG_CLEAR = "[清缓存]"
 
 
 def _short_repr(value: Any, limit: int = 400) -> str:
@@ -222,8 +226,8 @@ class MerossBLEDevice:
                 None if ble is None else ble.name,
             )
 
-    def _log_gatt_discovery(self, client: BleakClientWithServiceCache) -> None:
-        """Log GATT services after connect; mark FAIL if Meross chars are missing."""
+    def _log_gatt_discovery(self, client: BleakClientWithServiceCache) -> bool:
+        """Log GATT services after connect; return True if Meross chars are present."""
         cached = getattr(client, "_cached_services", None)
         try:
             services = client.services
@@ -235,7 +239,7 @@ class MerossBLEDevice:
                 cached is not None,
                 err,
             )
-            return
+            return False
         if not services:
             _LOGGER.warning(
                 "%s %s empty services (cache_hit=%s client=%s)",
@@ -244,7 +248,7 @@ class MerossBLEDevice:
                 cached is not None,
                 type(client).__name__,
             )
-            return
+            return False
 
         has_service = False
         has_write = False
@@ -288,9 +292,11 @@ class MerossBLEDevice:
                 MEROSS_CHAR_WRITE,
                 MEROSS_CHAR_NOTIFY,
             )
+            return False
+        return True
 
-    async def _async_establish_connection(self) -> BleakClientWithServiceCache:
-        self._log_ha_ble_cache("before GATT connect")
+    async def _async_connect_and_settle(self) -> BleakClientWithServiceCache:
+        """Connect once, then wait for BlueZ connection-param retune to settle."""
         try:
             client = await establish_connection(
                 BleakClientWithServiceCache,
@@ -306,6 +312,55 @@ class MerossBLEDevice:
                 err,
             )
             raise
+        _LOGGER.info(
+            "%s %s 连接成功，等待 %.1fs 再使用 GATT / 订阅 Notify",
+            self.address,
+            _LOG_SETTLE,
+            GATT_POST_CONNECT_SETTLE,
+        )
+        await asyncio.sleep(GATT_POST_CONNECT_SETTLE)
+        return client
+
+    async def _async_clear_gatt_cache_and_reconnect(
+        self,
+        client: BleakClientWithServiceCache,
+    ) -> BleakClientWithServiceCache:
+        """Disconnect, best-effort BlueZ RemoveDevice, then reconnect once."""
+        with contextlib.suppress(Exception):
+            await client.disconnect()
+
+        cleared = False
+        try:
+            cleared = await clear_cache(self.address)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "%s %s clear_cache raised (non-BlueZ or D-Bus): %s",
+                self.address,
+                _LOG_CLEAR,
+                err,
+            )
+
+        _LOGGER.warning(
+            "%s %s GATT 表不完整，已断开并 clear_cache=%s；"
+            "冷却 %.1fs 后仅再连一次（Linux/BlueZ 有效）",
+            self.address,
+            _LOG_CLEAR,
+            cleared,
+            GATT_INPROGRESS_COOLDOWN,
+        )
+        await asyncio.sleep(GATT_INPROGRESS_COOLDOWN)
+        await self._async_wait_for_connect_window(reason="GATT cache recovery")
+        self._async_refresh_ble_device()
+        self._log_ha_ble_cache("after clear_cache, before GATT reconnect")
+        return await self._async_connect_and_settle()
+
+    async def _async_establish_connection(self) -> BleakClientWithServiceCache:
+        self._log_ha_ble_cache("before GATT connect")
+        client = await self._async_connect_and_settle()
+        if self._log_gatt_discovery(client):
+            return client
+        # One recovery only: incomplete table is often a sticky BlueZ cache.
+        client = await self._async_clear_gatt_cache_and_reconnect(client)
         self._log_gatt_discovery(client)
         return client
 

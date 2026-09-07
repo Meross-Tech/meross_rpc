@@ -355,7 +355,10 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
         self.host = host
         self.context.update(
             {
-                "title_placeholders": {"name": self.info["name"]},
+                "title_placeholders": {
+                    "name": self.info["name"],
+                    "address": mac,
+                },
                 "configuration_url": f"http://{host}",
             }
         )
