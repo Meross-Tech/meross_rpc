@@ -108,8 +108,9 @@ async def async_setup_bluetooth_entry(
         entry,
     )
     device.bind_runtime(
-        hass,
-        connectable=gatt_connectable,
+        refresh_ble_device=lambda: bluetooth.async_ble_device_from_address(
+            hass, address.upper(), gatt_connectable
+        ),
         gatt_lock=_async_ble_gatt_lock(hass),
         wait_advertisement=coordinator.async_wait_next_advertisement,
     )
