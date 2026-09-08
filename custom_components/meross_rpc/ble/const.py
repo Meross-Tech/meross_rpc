@@ -37,6 +37,8 @@ GATT_NOTIFY_TIMEOUT = 10.0
 # BlueZ often updates connection parameters immediately; discovering or
 # subscribing during that retiming can yield an incomplete char list.
 GATT_POST_CONNECT_SETTLE = 1.0
+# Extra wait before forcing a second GATT read on the same connection.
+GATT_REDISCOVER_SETTLE = 0.5
 
 # ---------------------------------------------------------------------------
 # Discovery / advertisement (ble_ha.md)

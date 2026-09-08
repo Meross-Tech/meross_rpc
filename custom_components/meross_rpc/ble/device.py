@@ -25,6 +25,7 @@ from .const import (
     GATT_INPROGRESS_COOLDOWN,
     GATT_NOTIFY_TIMEOUT,
     GATT_POST_CONNECT_SETTLE,
+    GATT_REDISCOVER_SETTLE,
     HISTORY_PAGE_SIZE,
     MEROSS_CHAR_NOTIFY,
     MEROSS_CHAR_WRITE,
@@ -61,6 +62,7 @@ _LOG_CACHE = "[CACHE]"
 _LOG_TIMEOUT = "[超时----]"
 _LOG_SETTLE = "[连接稳定]"
 _LOG_CLEAR = "[清缓存]"
+_LOG_REDISCOVER = "[补发现]"
 
 
 def _short_repr(value: Any, limit: int = 400) -> str:
@@ -111,6 +113,8 @@ class MerossBLEDevice:
         self._gatt_lock: asyncio.Lock | None = None
         self._wait_advertisement: Callable[[float], Awaitable[bool]] | None = None
         self._last_adv_monotonic: float | None = None
+        # BlueZ RemoveDevice at most once per GATT operation (identify/history).
+        self._bluez_remove_done = False
 
     def bind_runtime(
         self,
@@ -321,6 +325,47 @@ class MerossBLEDevice:
         await asyncio.sleep(GATT_POST_CONNECT_SETTLE)
         return client
 
+    async def _async_rediscover_services(
+        self, client: BleakClientWithServiceCache
+    ) -> None:
+        """Re-read GATT from BlueZ on the current connection (not RemoveDevice).
+
+        Bleak returns the in-memory table if ``services`` is already set, so a
+        plain ``get_services()`` is a no-op after an incomplete connect.
+        """
+        _LOGGER.info(
+            "%s %s 同连接重新拉取 GATT 服务（不 RemoveDevice）",
+            self.address,
+            _LOG_REDISCOVER,
+        )
+        await asyncio.sleep(GATT_REDISCOVER_SETTLE)
+        backend = getattr(client, "_backend", client)
+        with contextlib.suppress(Exception):
+            backend.services = None
+        try:
+            get_services = getattr(backend, "_get_services", None)
+            if get_services is not None:
+                await get_services(dangerous_use_bleak_cache=False)
+            else:
+                public_get = getattr(client, "get_services", None)
+                if public_get is not None:
+                    await public_get()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "%s %s get_services failed: %s",
+                self.address,
+                _LOG_REDISCOVER,
+                err,
+            )
+
+    async def _async_meross_gatt_ready(
+        self, client: BleakClientWithServiceCache
+    ) -> bool:
+        if self._log_gatt_discovery(client):
+            return True
+        await self._async_rediscover_services(client)
+        return self._log_gatt_discovery(client)
+
     async def _async_clear_gatt_cache_and_reconnect(
         self,
         client: BleakClientWithServiceCache,
@@ -340,13 +385,14 @@ class MerossBLEDevice:
                 err,
             )
 
+        # Advertisement heard before RemoveDevice still points at a dead path.
+        self._last_adv_monotonic = None
         _LOGGER.warning(
-            "%s %s GATT 表不完整，已断开并 clear_cache=%s；"
-            "冷却 %.1fs 后仅再连一次（Linux/BlueZ 有效）",
+            "%s %s 补发现仍不完整，已断开并 clear_cache=%s；"
+            "等待新广告后再连一次（Linux/BlueZ 有效）",
             self.address,
             _LOG_CLEAR,
             cleared,
-            GATT_INPROGRESS_COOLDOWN,
         )
         await asyncio.sleep(GATT_INPROGRESS_COOLDOWN)
         await self._async_wait_for_connect_window(reason="GATT cache recovery")
@@ -357,12 +403,17 @@ class MerossBLEDevice:
     async def _async_establish_connection(self) -> BleakClientWithServiceCache:
         self._log_ha_ble_cache("before GATT connect")
         client = await self._async_connect_and_settle()
-        if self._log_gatt_discovery(client):
+        if await self._async_meross_gatt_ready(client):
             return client
-        # One recovery only: incomplete table is often a sticky BlueZ cache.
-        client = await self._async_clear_gatt_cache_and_reconnect(client)
-        self._log_gatt_discovery(client)
-        return client
+        if not self._bluez_remove_done:
+            client = await self._async_clear_gatt_cache_and_reconnect(client)
+            self._bluez_remove_done = True
+            if await self._async_meross_gatt_ready(client):
+                return client
+        raise MerossBLEError(
+            f"{self.address} incomplete GATT after rediscover/"
+            "clear_cache; skip start_notify"
+        )
 
     async def _async_start_notify(
         self,
@@ -634,6 +685,7 @@ class MerossBLEDevice:
         scale: float,
         start_idx: int,
     ) -> list[HistorySample]:
+        self._bluez_remove_done = False
         last_error: Exception | None = None
         for attempt in range(1, self.retry_count + 1):
             try:
@@ -805,6 +857,7 @@ class MerossBLEDevice:
             await client.disconnect()
 
     async def _request_raw(self, frame: bytes) -> bytes:
+        self._bluez_remove_done = False
         last_error: Exception | None = None
         for attempt in range(1, self.retry_count + 1):
             try:
