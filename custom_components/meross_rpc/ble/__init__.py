@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
@@ -22,6 +24,8 @@ from .const import (
 )
 from .coordinator import MerossBLEDataUpdateCoordinator
 from .device import create_device
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _async_ble_gatt_lock(hass: HomeAssistant) -> asyncio.Lock:
@@ -107,12 +111,54 @@ async def async_setup_bluetooth_entry(
         model,
         entry,
     )
+    def _inspect_ble_cache(reason: str) -> None:
+        """Dump HA bluetooth-manager cache for GATT debug (host-side)."""
+        for connectable in (True, False):
+            info = bluetooth.async_last_service_info(
+                hass, address, connectable=connectable
+            )
+            ble = bluetooth.async_ble_device_from_address(
+                hass, address.upper(), connectable
+            )
+            if info is None:
+                _LOGGER.info(
+                    "%s [CACHE] %s HA last_service_info connectable=%s empty "
+                    "ble_device=%s",
+                    address,
+                    reason,
+                    connectable,
+                    ble,
+                )
+                continue
+            age = time.monotonic() - info.time
+            adv = info.advertisement
+            service_data = {
+                str(key): bytes(value).hex()
+                for key, value in (adv.service_data or {}).items()
+            }
+            _LOGGER.info(
+                "%s [CACHE] %s HA last_service_info connectable=%s age=%.1fs "
+                "name=%r rssi=%s adv_connectable=%s service_uuids=%s "
+                "service_data=%s ble_device_name=%r",
+                address,
+                reason,
+                connectable,
+                age,
+                info.name,
+                info.rssi,
+                info.connectable,
+                list(adv.service_uuids or []),
+                service_data or "(none)",
+                None if ble is None else ble.name,
+            )
+
     device.bind_runtime(
         refresh_ble_device=lambda: bluetooth.async_ble_device_from_address(
             hass, address.upper(), gatt_connectable
         ),
         gatt_lock=_async_ble_gatt_lock(hass),
         wait_advertisement=coordinator.async_wait_next_advertisement,
+        inspect_ble_cache=_inspect_ble_cache,
     )
     entry.async_on_unload(coordinator.async_start())
     if not await coordinator.async_wait_ready():
