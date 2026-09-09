@@ -20,11 +20,11 @@ DEVICE_STARTUP_TIMEOUT = 30
 # async_track_unavailable may never fire after battery removal / BT off.
 ADVERTISEMENT_STALE_SECONDS = 600
 # Shared across all Meross BLE entries: Pi/USB adapters often have 1 connection slot.
-DATA_BLE_GATT_GATE = "ble_gatt_gate"
-# After Identify preempts history, wait this long before retrying the sync.
-HISTORY_YIELD_RESCHEDULE_SECONDS = 30.0
-# After a failed GATT attempt, wait for the next advertisement before retrying.
-GATT_ADV_WAIT_TIMEOUT = 8.0
+DATA_BLE_GATT_LOCK = "ble_gatt_lock"
+# After a failed GATT attempt, wait for the next advertisement before retrying
+# (device is more likely connectable right after it wakes to advertise).
+# Idle ads are often ~30s apart; keep the wait below a full minute for UI feel.
+GATT_ADV_WAIT_TIMEOUT = 35.0
 # If we heard the device this recently, skip waiting and connect immediately.
 GATT_FRESH_ADV_SECONDS = 5.0
 # BlueZ / CoreBluetooth need a moment to free the slot before another connect.

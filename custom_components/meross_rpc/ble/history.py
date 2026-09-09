@@ -23,7 +23,7 @@ from .const import (
     CONF_TEMP_HISTORY_NEXT_IDX,
     MerossModel,
 )
-from .device import MerossBLEError, MerossBLEHistoryYield
+from .device import MerossBLEError
 from .protocol import HistorySample
 
 if TYPE_CHECKING:
@@ -236,12 +236,6 @@ async def async_sync_ms120_history(
     try:
         temp_all = await coordinator.device.fetch_temperature_history(temp_next)
         humi_all = await coordinator.device.fetch_humidity_history(humi_next)
-    except MerossBLEHistoryYield:
-        # Keep force_full if we had not finished; Identify gets the slot now.
-        if force_full:
-            coordinator.history_force_full_resync = True
-        coordinator.async_schedule_history_sync_after_yield()
-        return
     except MerossBLEError as err:
         _LOGGER.warning(
             "%s: MS120 history sync failed: %s", coordinator.ble_device.address, err
