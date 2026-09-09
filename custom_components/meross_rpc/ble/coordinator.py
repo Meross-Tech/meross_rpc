@@ -22,7 +22,6 @@ from .const import (
     CONNECTABLE_MODELS,
     DEVICE_STARTUP_TIMEOUT,
     GATT_ADV_WAIT_TIMEOUT,
-    HISTORY_YIELD_RESCHEDULE_SECONDS,
     MerossModel,
 )
 from .device import MerossBLEDevice
@@ -382,29 +381,6 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
 
         self._history_task = self.hass.async_create_task(
             _run(), name=f"meross_rpc_ble_history_{self.base_unique_id}"
-        )
-
-    @callback
-    def async_schedule_history_sync_after_yield(self) -> None:
-        """Retry history after Identify preempted the GATT slot."""
-        if self.model is not MerossModel.MS120:
-            return
-        self._async_cancel_history_yield_timer()
-        _LOGGER.info(
-            "%s: history yielded to Identify; retry in %ss",
-            self.ble_device.address,
-            HISTORY_YIELD_RESCHEDULE_SECONDS,
-        )
-
-        @callback
-        def _later(_now: datetime) -> None:
-            self._history_yield_unsub = None
-            self.async_schedule_history_sync()
-
-        self._history_yield_unsub = async_call_later(
-            self.hass,
-            HISTORY_YIELD_RESCHEDULE_SECONDS,
-            _later,
         )
 
     async def async_wait_ready(self) -> bool:
