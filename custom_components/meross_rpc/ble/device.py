@@ -12,6 +12,7 @@ from typing import Any
 from bleak.backends.device import BLEDevice
 from bleak_retry_connector import (
     BleakClientWithServiceCache,
+    clear_cache,
     establish_connection,
 )
 from homeassistant.components import bluetooth
@@ -22,10 +23,13 @@ from .const import (
     GATT_ADV_WAIT_TIMEOUT,
     GATT_FRESH_ADV_SECONDS,
     GATT_INPROGRESS_COOLDOWN,
-    GATT_NOTIFY_SUBSCRIBE_SETTLE,
+    GATT_NOTIFY_TIMEOUT,
+    GATT_POST_CONNECT_SETTLE,
+    GATT_REDISCOVER_SETTLE,
     HISTORY_PAGE_SIZE,
     MEROSS_CHAR_NOTIFY,
     MEROSS_CHAR_WRITE,
+    MEROSS_GATT_SERVICE,
     MODEL_TO_SUBDEV,
     TAG_HUMI_HISTORY_COUNT,
     TAG_HUMI_HISTORY_DATA,
@@ -34,7 +38,6 @@ from .const import (
     MerossModel,
     ms700_logical_button,
 )
-from .gatt import MerossBleGattGate
 from .parser import MerossAdvertisement
 from .protocol import (
     HistorySample,
@@ -52,17 +55,33 @@ from .protocol import (
 
 _LOGGER = logging.getLogger(__name__)
 
+_LOG_SVC = "[SVC-DISCOVER]"
+_LOG_SVC_FAIL = "[SVC-DISCOVER-FAIL]"
+_LOG_NOTIFY = "[START-NOTIFY]"
+_LOG_CACHE = "[CACHE]"
+_LOG_TIMEOUT = "[超时----]"
+_LOG_SETTLE = "[连接稳定]"
+_LOG_CLEAR = "[清缓存]"
+_LOG_REDISCOVER = "[补发现]"
+
+
+def _short_repr(value: Any, limit: int = 400) -> str:
+    text = repr(value)
+    if len(text) > limit:
+        return text[:limit] + "..."
+    return text
+
+
+def _uuid_key(value: object) -> str:
+    return str(value).lower().replace("-", "")
+
+
+def _char_matches(char: Any, expected: str) -> bool:
+    return _uuid_key(getattr(char, "uuid", char)) == _uuid_key(expected)
+
 
 class MerossBLEError(Exception):
     """Device-layer error."""
-
-
-class MerossBLEHistoryYield(MerossBLEError):
-    """History aborted so Identify can use the shared GATT slot."""
-
-
-class MerossBLENotifyTimeout(MerossBLEError):
-    """Connected, but firmware did not ACK on the notify characteristic."""
 
 
 class MerossBLEDevice:
@@ -91,29 +110,25 @@ class MerossBLEDevice:
         self._event_req_id_bootstrapped = False
         self._hass: HomeAssistant | None = None
         self._connectable = True
-        self._gatt_gate: MerossBleGattGate | None = None
+        self._gatt_lock: asyncio.Lock | None = None
         self._wait_advertisement: Callable[[float], Awaitable[bool]] | None = None
         self._last_adv_monotonic: float | None = None
+        # BlueZ RemoveDevice at most once per GATT operation (identify/history).
+        self._bluez_remove_done = False
 
     def bind_runtime(
         self,
         hass: HomeAssistant,
         *,
         connectable: bool,
-        gatt_gate: MerossBleGattGate,
+        gatt_lock: asyncio.Lock,
         wait_advertisement: Callable[[float], Awaitable[bool]],
     ) -> None:
         """Attach HA runtime helpers used for GATT (shared slot + adv window)."""
         self._hass = hass
         self._connectable = connectable
-        self._gatt_gate = gatt_gate
+        self._gatt_lock = gatt_lock
         self._wait_advertisement = wait_advertisement
-
-    def _raise_if_history_should_yield(self) -> None:
-        if self._gatt_gate is not None and self._gatt_gate.identify_waiting:
-            raise MerossBLEHistoryYield(
-                "Identify waiting for GATT; history yielding"
-            )
 
     @property
     def address(self) -> str:
@@ -139,31 +154,295 @@ class MerossBLEDevice:
         self._device = device
 
     def _async_refresh_ble_device(self) -> None:
-        """Use the most recently heard BLEDevice (macOS often flags ads non-connectable)."""
+        """Prefer the freshest connectable BLEDevice from HA's bluetooth cache."""
         if self._hass is None:
             return
-        info = bluetooth.async_last_service_info(
-            self._hass, self.address, connectable=False
-        )
-        if info is not None:
-            self._device = info.device
-            return
         ble_device = bluetooth.async_ble_device_from_address(
-            self._hass, self.address.upper(), False
+            self._hass, self.address.upper(), self._connectable
         )
         if ble_device is not None:
             self._device = ble_device
 
     @staticmethod
-    def _is_missing_gatt_characteristic(err: BaseException) -> bool:
-        text = str(err).lower()
-        return "characteristic" in text and "not found" in text
+    def _is_slot_or_inprogress_error(err: BaseException) -> bool:
+        text = str(err)
+        return (
+            "InProgress" in text
+            or "connection slot" in text.lower()
+            or "out of connection slots" in text.lower()
+        )
 
-    def _last_service_info(self) -> bluetooth.BluetoothServiceInfoBleak | None:
+    def _log_ha_ble_cache(self, reason: str) -> None:
+        """Dump HA bluetooth-manager cache and the BLEDevice about to be used."""
+        device = self._device
+        _LOGGER.debug(
+            "%s %s %s using BLEDevice name=%r rssi=%s details=%s",
+            self.address,
+            _LOG_CACHE,
+            reason,
+            device.name,
+            getattr(device, "rssi", None),
+            _short_repr(getattr(device, "details", None)),
+        )
         if self._hass is None:
-            return None
-        return bluetooth.async_last_service_info(
-            self._hass, self.address, connectable=False
+            _LOGGER.debug(
+                "%s %s HA manager unavailable (no hass; bind path)",
+                self.address,
+                _LOG_CACHE,
+            )
+            return
+        for connectable in (True, False):
+            info = bluetooth.async_last_service_info(
+                self._hass, self.address, connectable=connectable
+            )
+            ble = bluetooth.async_ble_device_from_address(
+                self._hass, self.address.upper(), connectable
+            )
+            if info is None:
+                _LOGGER.debug(
+                    "%s %s HA last_service_info connectable=%s empty "
+                    "ble_device=%s",
+                    self.address,
+                    _LOG_CACHE,
+                    connectable,
+                    _short_repr(ble),
+                )
+                continue
+            age = time.monotonic() - info.time
+            adv = info.advertisement
+            service_data = {
+                str(key): bytes(value).hex()
+                for key, value in (adv.service_data or {}).items()
+            }
+            _LOGGER.debug(
+                "%s %s HA last_service_info connectable=%s age=%.1fs "
+                "name=%r rssi=%s adv_connectable=%s service_uuids=%s "
+                "service_data=%s ble_device_name=%r",
+                self.address,
+                _LOG_CACHE,
+                connectable,
+                age,
+                info.name,
+                info.rssi,
+                info.connectable,
+                list(adv.service_uuids or []),
+                service_data or "(none)",
+                None if ble is None else ble.name,
+            )
+
+    def _log_gatt_discovery(self, client: BleakClientWithServiceCache) -> bool:
+        """Log GATT services after connect; return True if Meross chars are present."""
+        cached = getattr(client, "_cached_services", None)
+        try:
+            services = client.services
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "%s %s cannot read services cached=%s: %s",
+                self.address,
+                _LOG_SVC_FAIL,
+                cached is not None,
+                err,
+            )
+            return False
+        if not services:
+            _LOGGER.debug(
+                "%s %s empty services (cache_hit=%s client=%s)",
+                self.address,
+                _LOG_SVC_FAIL,
+                cached is not None,
+                type(client).__name__,
+            )
+            return False
+
+        has_service = False
+        has_write = False
+        has_notify = False
+        chars: list[str] = []
+        service_count = 0
+        for service in services:
+            service_count += 1
+            if _uuid_key(service.uuid) == _uuid_key(MEROSS_GATT_SERVICE):
+                has_service = True
+            for char in service.characteristics:
+                props = ",".join(char.properties)
+                chars.append(f"{char.uuid}[{props}]")
+                if _char_matches(char, MEROSS_CHAR_WRITE):
+                    has_write = True
+                if _char_matches(char, MEROSS_CHAR_NOTIFY):
+                    has_notify = True
+
+        _LOGGER.debug(
+            "%s %s cache_hit=%s meross_svc=%s write=%s notify=%s "
+            "service_count=%s chars=%s",
+            self.address,
+            _LOG_SVC,
+            cached is not None,
+            has_service,
+            has_write,
+            has_notify,
+            service_count,
+            chars,
+        )
+        if not has_service or not has_write or not has_notify:
+            _LOGGER.debug(
+                "%s %s missing meross_svc=%s write=%s notify=%s "
+                "expected svc=%s write=%s notify=%s",
+                self.address,
+                _LOG_SVC_FAIL,
+                has_service,
+                has_write,
+                has_notify,
+                MEROSS_GATT_SERVICE,
+                MEROSS_CHAR_WRITE,
+                MEROSS_CHAR_NOTIFY,
+            )
+            return False
+        return True
+
+    async def _async_connect_and_settle(self) -> BleakClientWithServiceCache:
+        """Connect once, then wait for BlueZ connection-param retune to settle."""
+        self._async_refresh_ble_device()
+        try:
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                self._device,
+                self.name,
+                max_attempts=1,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "%s %s establish_connection failed: %s",
+                self.address,
+                _LOG_SVC_FAIL,
+                err,
+            )
+            raise
+        _LOGGER.debug(
+            "%s %s 连接成功，等待 %.1fs 再使用 GATT / 订阅 Notify",
+            self.address,
+            _LOG_SETTLE,
+            GATT_POST_CONNECT_SETTLE,
+        )
+        await asyncio.sleep(GATT_POST_CONNECT_SETTLE)
+        return client
+
+    async def _async_rediscover_services(
+        self, client: BleakClientWithServiceCache
+    ) -> None:
+        """Re-read GATT from BlueZ on the current connection (not RemoveDevice).
+
+        Bleak returns the in-memory table if ``services`` is already set, so a
+        plain ``get_services()`` is a no-op after an incomplete connect.
+        """
+        _LOGGER.debug(
+            "%s %s 同连接重新拉取 GATT 服务（不 RemoveDevice）",
+            self.address,
+            _LOG_REDISCOVER,
+        )
+        await asyncio.sleep(GATT_REDISCOVER_SETTLE)
+        backend = getattr(client, "_backend", client)
+        with contextlib.suppress(Exception):
+            backend.services = None
+        try:
+            get_services = getattr(backend, "_get_services", None)
+            if get_services is not None:
+                await get_services(dangerous_use_bleak_cache=False)
+            else:
+                public_get = getattr(client, "get_services", None)
+                if public_get is not None:
+                    await public_get()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "%s %s get_services failed: %s",
+                self.address,
+                _LOG_REDISCOVER,
+                err,
+            )
+
+    async def _async_meross_gatt_ready(
+        self, client: BleakClientWithServiceCache
+    ) -> bool:
+        if self._log_gatt_discovery(client):
+            return True
+        await self._async_rediscover_services(client)
+        return self._log_gatt_discovery(client)
+
+    async def _async_clear_gatt_cache_and_reconnect(
+        self,
+        client: BleakClientWithServiceCache,
+    ) -> BleakClientWithServiceCache:
+        """Disconnect, best-effort BlueZ RemoveDevice, then reconnect once."""
+        with contextlib.suppress(Exception):
+            await client.disconnect()
+
+        cleared = False
+        try:
+            cleared = await clear_cache(self.address)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "%s %s clear_cache raised (non-BlueZ or D-Bus): %s",
+                self.address,
+                _LOG_CLEAR,
+                err,
+            )
+
+        # Advertisement heard before RemoveDevice still points at a dead path.
+        self._last_adv_monotonic = None
+        _LOGGER.debug(
+            "%s %s 补发现仍不完整，已断开并 clear_cache=%s；"
+            "等待新广告后再连一次（Linux/BlueZ 有效）",
+            self.address,
+            _LOG_CLEAR,
+            cleared,
+        )
+        await asyncio.sleep(GATT_INPROGRESS_COOLDOWN)
+        await self._async_wait_for_connect_window(reason="GATT cache recovery")
+        self._async_refresh_ble_device()
+        self._log_ha_ble_cache("after clear_cache, before GATT reconnect")
+        return await self._async_connect_and_settle()
+
+    async def _async_establish_connection(self) -> BleakClientWithServiceCache:
+        self._log_ha_ble_cache("before GATT connect")
+        client = await self._async_connect_and_settle()
+        if await self._async_meross_gatt_ready(client):
+            return client
+        if not self._bluez_remove_done:
+            client = await self._async_clear_gatt_cache_and_reconnect(client)
+            self._bluez_remove_done = True
+            if await self._async_meross_gatt_ready(client):
+                return client
+        raise MerossBLEError(
+            f"{self.address} incomplete GATT after rediscover/"
+            "clear_cache; skip start_notify"
+        )
+
+    async def _async_start_notify(
+        self,
+        client: BleakClientWithServiceCache,
+        callback: Callable[[int, bytearray], None],
+    ) -> None:
+        _LOGGER.debug(
+            "%s %s subscribing char=%s",
+            self.address,
+            _LOG_NOTIFY,
+            MEROSS_CHAR_NOTIFY,
+        )
+        try:
+            await client.start_notify(MEROSS_CHAR_NOTIFY, callback)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "%s %s FAIL char=%s: %s",
+                self.address,
+                _LOG_NOTIFY,
+                MEROSS_CHAR_NOTIFY,
+                err,
+            )
+            raise
+        _LOGGER.debug(
+            "%s %s OK char=%s",
+            self.address,
+            _LOG_NOTIFY,
+            MEROSS_CHAR_NOTIFY,
         )
 
     def _adv_is_fresh(self) -> bool:
@@ -207,21 +486,6 @@ class MerossBLEDevice:
                 reason=f"GATT retry {attempt}/{self.retry_count}"
             )
         self._async_refresh_ble_device()
-
-    async def _async_establish_connection(self) -> BleakClientWithServiceCache:
-        """Open one GATT connection. Do not cancel in-flight CoreBluetooth connects."""
-        self._async_refresh_ble_device()
-        try:
-            return await establish_connection(
-                BleakClientWithServiceCache,
-                self._device,
-                self.name,
-                max_attempts=1,
-            )
-        except Exception:
-            if self._gatt_gate is not None:
-                self._gatt_gate.note_disconnected()
-            raise
 
     def advertisement_changed(self, adv: MerossAdvertisement) -> bool:
         if self._last_adv is None:
@@ -346,16 +610,13 @@ class MerossBLEDevice:
 
     async def async_send_heartbeat(self) -> bool:
         """Send GATT heartbeat to wake firmware and refresh advertisements."""
-        if self._gatt_gate is not None:
-            async with self._gatt_gate.identify_claim():
-                return await self._async_send_heartbeat_claimed()
-        return await self._async_send_heartbeat_claimed()
-
-    async def _async_send_heartbeat_claimed(self) -> bool:
-        _LOGGER.debug("%s: heartbeat GATT write starting", self.address)
-        raw = await self._request_special(
-            lambda: build_heartbeat_frame(self.subdev_type, self._next_msg_id())
+        frame = build_heartbeat_frame(self.subdev_type, self._next_msg_id())
+        _LOGGER.debug(
+            "%s: heartbeat GATT write starting frame=%s",
+            self.address,
+            frame.hex(),
         )
+        raw = await self._request_raw(frame)
         if not raw:
             _LOGGER.debug("%s: heartbeat write done (no notify ACK)", self.address)
             return True
@@ -368,34 +629,28 @@ class MerossBLEDevice:
         )
         return ok
 
-    async def identify(self) -> None:
-        """Send Identify over GATT; firmware must ACK on the notify characteristic."""
-        if self._gatt_gate is not None:
-            async with self._gatt_gate.identify_claim():
-                await self.async_identify_claimed()
-            return
-        await self.async_identify_claimed()
-
-    async def async_identify_claimed(self) -> None:
-        """Identify while an Identify claim is already held (bind path)."""
-        _LOGGER.debug("%s: Identify GATT write starting", self.address)
-        raw = await self._request_raw(
-            lambda: build_identify_frame(self.subdev_type, self._next_msg_id())
-        )
-        if not raw:
-            raise MerossBLEError(
-                "Identify notify timeout (no ACK); firmware must respond on "
-                f"{MEROSS_CHAR_NOTIFY}"
-            )
-        if not parse_ack_success(raw):
-            raise MerossBLEError(
-                f"Identify failed: non-success notify ACK: {raw.hex()}"
-            )
+    async def identify(self) -> bool:
+        """Send Identify (beep/flash) over GATT."""
+        await self._async_wait_for_connect_window(reason="Identify")
+        frame = build_identify_frame(self.subdev_type, self._next_msg_id())
         _LOGGER.debug(
-            "%s: Identify done ack_ok notify=%s",
+            "%s: Identify GATT write starting frame=%s",
             self.address,
+            frame.hex(),
+        )
+        raw = await self._request_raw(frame)
+        # No notify still counts as success for identify (device may not ACK)
+        if not raw:
+            _LOGGER.debug("%s: Identify write done (no notify ACK)", self.address)
+            return True
+        ok = parse_ack_success(raw)
+        _LOGGER.debug(
+            "%s: Identify write done ack_ok=%s notify=%s",
+            self.address,
+            ok,
             raw.hex(),
         )
+        return ok
 
     async def fetch_temperature_history(
         self, start_idx: int = 0
@@ -431,12 +686,13 @@ class MerossBLEDevice:
         scale: float,
         start_idx: int,
     ) -> list[HistorySample]:
+        self._bluez_remove_done = False
         last_error: Exception | None = None
         for attempt in range(1, self.retry_count + 1):
             try:
                 await self._async_prepare_gatt_attempt(attempt)
-                if self._gatt_gate is not None:
-                    async with self._gatt_gate.history_session():
+                if self._gatt_lock is not None:
+                    async with self._gatt_lock:
                         return await self._fetch_history_once(
                             count_builder=count_builder,
                             data_builder=data_builder,
@@ -453,11 +709,10 @@ class MerossBLEDevice:
                     scale=scale,
                     start_idx=start_idx,
                 )
-            except MerossBLEHistoryYield:
-                raise
             except Exception as err:  # noqa: BLE001
                 last_error = err
-                _LOGGER.warning(
+                log = _LOGGER.warning if attempt == self.retry_count else _LOGGER.debug
+                log(
                     "%s history fetch failed (%s/%s): %s",
                     self.address,
                     attempt,
@@ -490,10 +745,9 @@ class MerossBLEDevice:
 
         samples: list[HistorySample] = []
         try:
-            await client.start_notify(MEROSS_CHAR_NOTIFY, _on_notify)
+            await self._async_start_notify(client, _on_notify)
             # Give CCCD enable time before first write (CoreBluetooth often needs this).
-            await asyncio.sleep(GATT_NOTIFY_SUBSCRIBE_SETTLE)
-            self._raise_if_history_should_yield()
+            await asyncio.sleep(0.5)
 
             count_frame = count_builder(self.subdev_type, self._next_msg_id())
             _LOGGER.debug(
@@ -508,7 +762,7 @@ class MerossBLEDevice:
                 payload_box,
                 lambda frame=count_frame: frame,
                 write_with_response=False,
-                timeout=10.0,
+                timeout=GATT_NOTIFY_TIMEOUT,
             )
             _LOGGER.debug(
                 "%s: history COUNT notify tag=%#x raw=%s",
@@ -548,7 +802,6 @@ class MerossBLEDevice:
             cursor = start_idx
             end_exclusive = total
             while cursor < end_exclusive:
-                self._raise_if_history_should_yield()
                 page_end = min(cursor + HISTORY_PAGE_SIZE, end_exclusive) - 1
                 start = cursor
                 end = page_end
@@ -569,7 +822,7 @@ class MerossBLEDevice:
                     payload_box,
                     lambda frame=data_frame: frame,
                     write_with_response=False,
-                    timeout=10.0,
+                    timeout=GATT_NOTIFY_TIMEOUT,
                 )
                 _LOGGER.debug(
                     "%s: history DATA notify tag=%#x idx=%s-%s raw_len=%s",
@@ -604,94 +857,34 @@ class MerossBLEDevice:
             with contextlib.suppress(Exception):
                 await client.stop_notify(MEROSS_CHAR_NOTIFY)
             await client.disconnect()
-            if self._gatt_gate is not None:
-                self._gatt_gate.note_disconnected()
 
-    async def _request_special(self, frame_factory: Callable[[], bytes]) -> bytes:
-        """Heartbeat: prefer notify+write; empty ACK is OK; fall back to write-only."""
-        try:
-            return await self._request_raw(frame_factory, require_notify=False)
-        except MerossBLEError as err:
-            if not self._is_missing_gatt_characteristic(err):
-                raise
-            _LOGGER.info(
-                "%s: GATT notify characteristic missing (%s); write-only",
-                self.address,
-                err,
-            )
-            await self._request_write_only(frame_factory())
-            return b""
-
-    async def _request_write_only(self, frame: bytes) -> None:
+    async def _request_raw(self, frame: bytes) -> bytes:
+        self._bluez_remove_done = False
         last_error: Exception | None = None
         for attempt in range(1, self.retry_count + 1):
             try:
                 await self._async_prepare_gatt_attempt(attempt)
-                if self._gatt_gate is not None:
-                    async with self._gatt_gate.identify_session():
-                        await self._execute_write_only(frame)
-                        return
-                await self._execute_write_only(frame)
-                return
+                if self._gatt_lock is not None:
+                    async with self._gatt_lock:
+                        return await self._execute_once(frame)
+                return await self._execute_once(frame)
             except Exception as err:  # noqa: BLE001
                 last_error = err
-                _LOGGER.warning(
-                    "%s: GATT write-only failed (%s/%s): %s",
+                log = _LOGGER.warning if attempt == self.retry_count else _LOGGER.debug
+                log(
+                    "%s frame failed (%s/%s): %s",
                     self.address,
                     attempt,
                     self.retry_count,
                     err,
                 )
-                if attempt < self.retry_count:
-                    await asyncio.sleep(GATT_INPROGRESS_COOLDOWN)
-        if last_error:
-            raise MerossBLEError(str(last_error)) from last_error
-
-    async def _execute_write_only(self, frame: bytes) -> None:
-        client = await self._async_establish_connection()
-        try:
-            await client.write_gatt_char(
-                MEROSS_CHAR_WRITE, frame, response=False
-            )
-        finally:
-            await client.disconnect()
-            if self._gatt_gate is not None:
-                self._gatt_gate.note_disconnected()
-
-    async def _request_raw(
-        self, frame_factory: Callable[[], bytes], *, require_notify: bool = True
-    ) -> bytes:
-        last_error: Exception | None = None
-        for attempt in range(1, self.retry_count + 1):
-            try:
-                await self._async_prepare_gatt_attempt(attempt)
-                if self._gatt_gate is not None:
-                    async with self._gatt_gate.identify_session():
-                        raw = await self._execute_once(frame_factory)
-                else:
-                    raw = await self._execute_once(frame_factory)
-                if raw or not require_notify:
-                    return raw
-                raise MerossBLENotifyTimeout(
-                    "GATT notify timeout (no ACK); retrying on a new connection"
-                )
-            except Exception as err:  # noqa: BLE001
-                last_error = err
-                _LOGGER.warning(
-                    "%s frame failed (%s/%s): %s",
-                    self.address,
-                    attempt,
-                    self.retry_count,
-                    str(err) or type(err).__name__,
-                )
-                if attempt < self.retry_count:
+                if self._is_slot_or_inprogress_error(err):
                     await asyncio.sleep(GATT_INPROGRESS_COOLDOWN)
         if last_error:
             raise MerossBLEError(str(last_error)) from last_error
         return b""
 
-    async def _execute_once(self, frame_factory: Callable[[], bytes]) -> bytes:
-        """One write on a fresh connection; caller retries if notify is empty."""
+    async def _execute_once(self, frame: bytes) -> bytes:
         client = await self._async_establish_connection()
         notify = asyncio.Event()
         payload_box: dict[str, bytes] = {}
@@ -701,18 +894,14 @@ class MerossBLEDevice:
             notify.set()
 
         try:
-            await client.start_notify(MEROSS_CHAR_NOTIFY, _on_notify)
-            # Firmware sends Notify only after CCCD subscribe.
-            await asyncio.sleep(GATT_NOTIFY_SUBSCRIBE_SETTLE)
+            await self._async_start_notify(client, _on_notify)
             return await self._exchange(
-                client, notify, payload_box, frame_factory
+                client, notify, payload_box, lambda: frame
             )
         finally:
             with contextlib.suppress(Exception):
                 await client.stop_notify(MEROSS_CHAR_NOTIFY)
             await client.disconnect()
-            if self._gatt_gate is not None:
-                self._gatt_gate.note_disconnected()
 
     async def _exchange(
         self,
@@ -721,12 +910,19 @@ class MerossBLEDevice:
         payload_box: dict[str, bytes],
         frame_factory: Callable[[], bytes],
         *,
-        write_with_response: bool = False,
-        timeout: float = 5.0,
+        write_with_response: bool = True,
+        timeout: float = GATT_NOTIFY_TIMEOUT,
     ) -> bytes:
         notify.clear()
         payload_box.pop("data", None)
         frame = frame_factory()
+        _LOGGER.debug(
+            "%s %s 等待Notify应答 timeout=%.1fs frame=%s",
+            self.address,
+            _LOG_TIMEOUT,
+            timeout,
+            frame.hex(),
+        )
         await client.write_gatt_char(
             MEROSS_CHAR_WRITE, frame, response=write_with_response
         )
@@ -735,12 +931,19 @@ class MerossBLEDevice:
                 await notify.wait()
         except TimeoutError:
             _LOGGER.debug(
-                "%s: no notify within %.1fs for frame %s",
+                "%s %s Notify应答超时 timeout=%.1fs frame=%s",
                 self.address,
+                _LOG_TIMEOUT,
                 timeout,
                 frame.hex(),
             )
             return b""
+        _LOGGER.debug(
+            "%s %s Notify应答成功 timeout=%.1fs",
+            self.address,
+            _LOG_TIMEOUT,
+            timeout,
+        )
         return payload_box.get("data", b"")
 
 

@@ -45,19 +45,15 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
-from .ble import async_get_ble_gatt_gate
 from .ble.const import (
     CONF_BOUND_IDENTIFY_DONE,
     CONF_MODEL,
     CONF_RETRY_COUNT,
     DEFAULT_RETRY_COUNT,
-    GATT_BIND_ADV_WAIT_SECONDS,
-    GATT_FRESH_ADV_SECONDS,
     MODEL_FRIENDLY_NAME,
     MerossModel,
 )
 from .ble.device import MerossBLEError, create_device
-from .ble.gatt import MerossBleGattGate
 from .ble.parser import MerossAdvertisement, parse_advertisement_data
 from .const import (
     CONF_CONNECTION,
@@ -79,19 +75,21 @@ def _format_ble_unique_id(address: str) -> str:
     return address.replace(":", "").replace("-", "").lower()
 
 
-def _short_address(address: str) -> str:
-    parts = address.replace("-", ":").split(":")
-    return f"{parts[-2].upper()}{parts[-1].upper()}"[-4:]
-
-
 def _name_from_discovery(discovery: MerossAdvertisement) -> str:
-    """Config entry / confirm title (no MAC suffix)."""
+    """Config entry title (no MAC suffix)."""
     return discovery.friendly_name
 
 
 def _label_from_discovery(discovery: MerossAdvertisement) -> str:
-    """Picker label; include full address when choosing among several devices."""
+    """Picker / confirm label: model name plus full MAC."""
     return f"{discovery.friendly_name} ({discovery.address})"
+
+
+def _discovery_title_placeholders(discovery: MerossAdvertisement) -> dict[str, str]:
+    return {
+        "name": discovery.friendly_name,
+        "address": discovery.address,
+    }
 
 
 def _collect_discovered_service_info(
@@ -387,7 +385,10 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
         self.host = host
         self.context.update(
             {
-                "title_placeholders": {"name": self.info["name"]},
+                "title_placeholders": {
+                    "name": self.info["name"],
+                    "address": mac,
+                },
                 "configuration_url": f"http://{host}",
             }
         )
@@ -496,10 +497,7 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="not_supported")
 
         self._discovered = parsed
-        self.context["title_placeholders"] = {
-            "name": parsed.friendly_name,
-            "address": _short_address(discovery_info.address),
-        }
+        self.context["title_placeholders"] = _discovery_title_placeholders(parsed)
         return await self.async_step_bluetooth_confirm()
 
     async def async_step_bluetooth_setup(
@@ -520,6 +518,9 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             self._abort_if_unique_id_configured()
             self._discovered = discovery
+            self.context["title_placeholders"] = _discovery_title_placeholders(
+                discovery
+            )
             return await self.async_step_bluetooth_confirm()
 
         await bluetooth.async_request_active_scan(self.hass, MANUAL_SCAN_DURATION)
@@ -556,6 +557,9 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             self._abort_if_unique_id_configured()
             self._discovered = discovery
+            self.context["title_placeholders"] = _discovery_title_placeholders(
+                discovery
+            )
             return await self.async_step_bluetooth_confirm()
 
         return self.async_show_form(
@@ -595,72 +599,21 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
         self._set_confirm_only()
         return self.async_show_form(
             step_id="bluetooth_confirm",
-            description_placeholders={
-                "name": _name_from_discovery(self._discovered),
-            },
+            description_placeholders=_discovery_title_placeholders(self._discovered),
             errors=errors,
         )
 
     async def _async_bind_identify(self, discovery: MerossAdvertisement) -> None:
         """GATT Identify once when the user confirms adding the device."""
-        gate = async_get_ble_gatt_gate(self.hass)
-        async with gate.identify_claim():
-            await self._async_bind_identify_claimed(discovery, gate)
-
-    async def _async_bind_identify_claimed(
-        self, discovery: MerossAdvertisement, gate: MerossBleGattGate
-    ) -> None:
-        """Wait for ads then Identify; Identify claim is already held."""
-        # macOS keeps advertisements in cache forever; only skip the wait
-        # when HA heard a parseable packet in the last few seconds.
-        service_info = bluetooth.async_last_service_info(
-            self.hass, discovery.address, connectable=False
+        ble_device = bluetooth.async_ble_device_from_address(
+            self.hass, discovery.address.upper(), connectable=True
         )
-        cache_fresh = (
-            service_info is not None
-            and _parse_bind_advertisement(service_info, discovery.model) is not None
-            and (time.monotonic() - service_info.time) <= GATT_FRESH_ADV_SECONDS
-        )
-        if not cache_fresh:
-            service_info = await _async_wait_bind_advertisement(
-                self.hass, discovery, GATT_BIND_ADV_WAIT_SECONDS
-            )
-        if service_info is None:
-            LOGGER.warning(
-                "%s: no parseable advertisement within %ss before Identify; "
-                "trying GATT anyway",
-                discovery.address,
-                GATT_BIND_ADV_WAIT_SECONDS,
-            )
-            ble_device = bluetooth.async_ble_device_from_address(
-                self.hass, discovery.address.upper(), connectable=True
-            )
-        else:
-            ble_device = service_info.device
-
         if not ble_device:
             raise MerossBLEError(
                 f"Could not find Meross BLE device with address {discovery.address}"
             )
-
-        async def _wait_advertisement(timeout: float) -> bool:
-            return (
-                await _async_wait_bind_advertisement(self.hass, discovery, timeout)
-                is not None
-            )
-
         device = create_device(ble_device, discovery.model)
-        device.bind_runtime(
-            self.hass,
-            connectable=True,
-            gatt_gate=gate,
-            wait_advertisement=_wait_advertisement,
-        )
-        if service_info is not None:
-            adv = _parse_bind_advertisement(service_info, discovery.model)
-            if adv is not None:
-                device.update_from_advertisement(adv)
-        await device.async_identify_claimed()
+        await device.identify()
         LOGGER.info("%s: Identify sent on HA bind (user confirmed)", discovery.address)
 
     def _async_create_ble_entry(
