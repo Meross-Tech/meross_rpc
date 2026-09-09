@@ -29,12 +29,16 @@ GATT_ADV_WAIT_TIMEOUT = 8.0
 GATT_FRESH_ADV_SECONDS = 5.0
 # BlueZ / CoreBluetooth need a moment to free the slot before another connect.
 GATT_INPROGRESS_COOLDOWN = 2.0
-# After a GATT disconnect, wait before the next connect (Pi InProgress, macOS
-# reconnect-too-soon after Identify → history).
-GATT_YIELD_SLOT_COOLDOWN = 2.0
-# Firmware only emits Notify after CCCD subscribe; give the stack time to apply it.
-GATT_NOTIFY_SUBSCRIBE_SETTLE = 0.5
-GATT_BIND_ADV_WAIT_SECONDS = 5
+# Wait for GATT Notify ACK after write (Identify / control / history pages).
+# BlueZ may update connection parameters right after connect; a short wait
+# was timing out before the firmware ACK arrived.
+GATT_NOTIFY_TIMEOUT = 10.0
+# After connect, wait before using the GATT table / start_notify.
+# BlueZ often updates connection parameters immediately; discovering or
+# subscribing during that retiming can yield an incomplete char list.
+GATT_POST_CONNECT_SETTLE = 1.0
+# Extra wait before forcing a second GATT read on the same connection.
+GATT_REDISCOVER_SETTLE = 0.5
 
 # ---------------------------------------------------------------------------
 # Discovery / advertisement (ble_ha.md)
