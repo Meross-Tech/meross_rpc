@@ -49,12 +49,6 @@ MS220_CORE_BINARY_SENSORS: tuple[MerossBLEBinarySensorEntityDescription, ...] = 
         device_class=BinarySensorDeviceClass.OPENING,
         value_key="door_open",
     ),
-    MerossBLEBinarySensorEntityDescription(
-        key="vibration",
-        translation_key="vibration",
-        device_class=BinarySensorDeviceClass.VIBRATION,
-        value_key="vibration",
-    ),
 )
 
 # Optional Meross-app alarms (door long open/closed, vibration).

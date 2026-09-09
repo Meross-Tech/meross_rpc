@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import time
 from typing import Any
 
 from aiorefoss.common import (
@@ -22,8 +23,10 @@ import voluptuous as vol
 
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
+    BluetoothScanningMode,
     BluetoothServiceInfoBleak,
     async_discovered_service_info,
+    async_process_advertisements,
 )
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -101,6 +104,33 @@ def _collect_discovered_service_info(
             seen.add(info.address)
             results.append(info)
     return results
+
+
+def _parse_bind_advertisement(
+    service_info: BluetoothServiceInfoBleak, model: MerossModel
+) -> MerossAdvertisement | None:
+    adv = parse_advertisement_data(
+        service_info.device, service_info.advertisement, model
+    )
+    if adv and "status" in adv.data:
+        return adv
+    return None
+
+
+async def _async_wait_bind_advertisement(
+    hass: HomeAssistant, discovery: MerossAdvertisement, timeout: float
+) -> BluetoothServiceInfoBleak | None:
+    """Wait for a live parseable advertisement before the bind GATT connect."""
+    try:
+        return await async_process_advertisements(
+            hass,
+            lambda info: _parse_bind_advertisement(info, discovery.model) is not None,
+            {"address": discovery.address},
+            BluetoothScanningMode.ACTIVE,
+            int(timeout),
+        )
+    except TimeoutError:
+        return None
 
 
 async def async_validate_input(

@@ -46,6 +46,7 @@ def _async_remove_legacy_ble_entities(hass: HomeAssistant, entry: ConfigEntry) -
     for domain, unique_suffix in (
         (Platform.BUTTON, "identify"),
         (Platform.SENSOR, "rssi"),
+        (Platform.BINARY_SENSOR, "vibration"),
     ):
         entity_id = registry.async_get_entity_id(
             domain, entry.domain, f"{entry.unique_id}-{unique_suffix}"
@@ -159,6 +160,10 @@ async def async_setup_bluetooth_entry(
         gatt_lock=_async_ble_gatt_lock(hass),
         wait_advertisement=coordinator.async_wait_next_advertisement,
         inspect_ble_cache=_inspect_ble_cache,
+        last_service_info=lambda: bluetooth.async_last_service_info(
+            hass, address, connectable=False
+        )
+        or bluetooth.async_last_service_info(hass, address, connectable=True),
     )
     entry.async_on_unload(coordinator.async_start())
     if not await coordinator.async_wait_ready():
@@ -172,7 +177,7 @@ async def async_setup_bluetooth_entry(
     )
     _async_remove_legacy_ble_entities(hass, entry)
     if model is MerossModel.MS120:
-        # Setup / reload: ask firmware for anything newer than last import.
+        # Setup / reload only: full firmware history buffer → HA statistics.
         coordinator.history_force_full_resync = True
         coordinator.async_schedule_history_sync()
     return True

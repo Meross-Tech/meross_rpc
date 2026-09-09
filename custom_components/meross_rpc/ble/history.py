@@ -203,11 +203,10 @@ def _import_series(
 async def async_sync_ms120_history(
     hass: HomeAssistant, coordinator: MerossBLEDataUpdateCoordinator
 ) -> None:
-    """Pull missing MS120 history over GATT and import into HA statistics.
+    """Pull MS120 history over GATT and import into HA statistics.
 
-    When HA has a local gap (device was unavailable), re-read the full firmware
-    buffer and import any samples newer than the last imported timestamp. This
-    covers ring buffers where his_num stays flat but indices are reused.
+    Only scheduled from integration setup/reload (full firmware buffer).
+    Recovery from unavailable does not trigger another pull.
     """
     if coordinator.model is not MerossModel.MS120:
         return

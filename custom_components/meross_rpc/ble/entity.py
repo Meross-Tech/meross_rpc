@@ -34,7 +34,8 @@ class MerossBLEEntity(
             model=MODEL_FRIENDLY_NAME.get(coordinator.model, coordinator.model.value),
             name=coordinator.device_name,
         )
-        self._last_logged_ha_state: tuple[bool, Any] | None = None
+        self._last_logged_available: bool | None = None
+        self._last_logged_value: Any = object()
 
     @property
     def parsed_data(self) -> dict[str, Any]:
@@ -60,16 +61,28 @@ class MerossBLEEntity(
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Write HA state and INFO-log when the entity value or availability changes."""
-        current = (self.available, self._entity_log_value())
-        if current != self._last_logged_ha_state:
+        """Write HA state; INFO only when availability changes, DEBUG for value."""
+        available = self.available
+        value = self._entity_log_value()
+        if available != self._last_logged_available:
             LOGGER.info(
                 "%s: %s HA entity %s available=%s value=%r",
                 self._address,
                 self.coordinator.model.value.upper(),
                 self._entity_log_key(),
-                current[0],
-                current[1],
+                available,
+                value,
             )
-            self._last_logged_ha_state = current
+            self._last_logged_available = available
+            self._last_logged_value = value
+        elif value != self._last_logged_value:
+            LOGGER.debug(
+                "%s: %s HA entity %s available=%s value=%r",
+                self._address,
+                self.coordinator.model.value.upper(),
+                self._entity_log_key(),
+                available,
+                value,
+            )
+            self._last_logged_value = value
         super()._handle_coordinator_update()
