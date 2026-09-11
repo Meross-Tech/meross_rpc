@@ -1,6 +1,6 @@
-"""BLE frame helpers; implementation lives in meross-ha."""
+"""BLE frame helpers; implementation lives in meross-ble."""
 
-from meross_ha.protocol import (
+from meross_ble.protocol import (
     HistorySample,
     build_heartbeat_frame,
     build_humi_history_count_frame,

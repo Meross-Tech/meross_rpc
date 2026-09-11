@@ -1,10 +1,10 @@
-"""HA-specific BLE constants; protocol constants come from meross_ha."""
+"""HA-specific BLE constants; protocol constants come from meross_ble."""
 
 from __future__ import annotations
 
 from logging import Logger, getLogger
 
-from meross_ha import (
+from meross_ble import (
     BATTERY_LOW_THRESHOLD as BATTERY_LOW_THRESHOLD,
     CONNECTABLE_MODELS as CONNECTABLE_MODELS,
     DEFAULT_RETRY_COUNT as DEFAULT_RETRY_COUNT,
@@ -19,7 +19,7 @@ from meross_ha import (
     ms700_default_button_name as ms700_default_button_name,
     ms700_logical_button as ms700_logical_button,
 )
-from meross_ha.const import (
+from meross_ble.const import (
     GATT_ADV_WAIT_TIMEOUT as GATT_ADV_WAIT_TIMEOUT,
     GATT_FRESH_ADV_SECONDS as GATT_FRESH_ADV_SECONDS,
     GATT_INPROGRESS_COOLDOWN as GATT_INPROGRESS_COOLDOWN,

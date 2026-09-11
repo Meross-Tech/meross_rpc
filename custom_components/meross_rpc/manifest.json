@@ -26,9 +26,9 @@
   "integration_type": "device",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/Meross-Tech/meross_rpc/issues",
-  "loggers": ["aiorefoss", "custom_components.meross_rpc", "custom_components.meross_rpc.ble"],
+  "loggers": ["aiorefoss", "meross_ble", "custom_components.meross_rpc", "custom_components.meross_rpc.ble"],
   "quality_scale": "bronze",
-  "requirements": ["aiorefoss==1.0.1", "bleak-retry-connector>=3.5.0"],
+  "requirements": ["aiorefoss==1.0.1", "meross-ble==0.2.0", "bleak-retry-connector>=3.5.0"],
   "version": "1.1.8",
   "zeroconf": [
     {
