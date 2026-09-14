@@ -197,25 +197,42 @@ class MerossBLEMS700ButtonEventEntity(_MerossBLEEventEntity):
         if label != self._attr_name:
             self._attr_name = label
         screen_enable = self.parsed_data.get("screen_enable")
-        for req_id, event_code in self.coordinator.last_new_events:
+        new_events = self.coordinator.last_new_events
+        if new_events:
+            _LOGGER.info(
+                "%s: [ms700-btn] entity button=%s name=%r screen_enable=%s "
+                "incoming=%s",
+                self.coordinator.ble_device.address,
+                self._button_number,
+                self._attr_name,
+                screen_enable,
+                [(rid, f"{code:#x}") for rid, code in new_events],
+            )
+        for req_id, event_code in new_events:
             logical = ms700_logical_button(event_code)
             if logical != self._button_number:
                 continue
             if screen_enable is not None and not ms700_button_enabled(
                 self._button_number, screen_enable
             ):
-                _LOGGER.debug(
-                    "%s: ignore press on disabled screen button %s (req_id=%s)",
+                _LOGGER.info(
+                    "%s: [ms700-btn] SKIP disabled screen button=%s "
+                    "req_id=%s event=%#x screen_enable=%s",
                     self.coordinator.ble_device.address,
                     self._button_number,
                     req_id,
+                    event_code,
+                    screen_enable,
                 )
                 continue
-            _LOGGER.debug(
-                "%s: MS700 entity %s fired press_end (req_id=%s)",
+            _LOGGER.info(
+                "%s: [ms700-btn] FIRE press_end button=%s name=%r "
+                "req_id=%s event=%#x",
                 self.coordinator.ble_device.address,
+                self._button_number,
                 self._attr_name,
                 req_id,
+                event_code,
             )
             self._trigger_event(ButtonEventType.PRESS_END)
             self.async_write_ha_state()

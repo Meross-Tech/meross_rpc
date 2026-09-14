@@ -346,6 +346,15 @@ class MerossBLEDataUpdateCoordinator(ActiveBluetoothDataUpdateCoordinator[None])
         self._async_schedule_stale_timer()
         self._async_notify_advertisement_waiters()
         self.last_new_events = new_events
+        if self.model is MerossModel.MS700 and (adv.events or new_events):
+            _LOGGER.info(
+                "%s: [ms700-btn] coordinator events_in=%s new_events=%s "
+                "notify_listeners=%s",
+                self.address,
+                [(rid, f"{code:#x}") for rid, code in adv.events],
+                [(rid, f"{code:#x}") for rid, code in new_events],
+                bool(new_events) or recovered or not self.available,
+            )
         if recovered:
             self._was_unavailable = False
             self._async_cancel_unavailable_adv_probe()

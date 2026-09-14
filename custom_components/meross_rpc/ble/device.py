@@ -514,13 +514,22 @@ class MerossBLEDevice:
             req_id, event_code = adv.events[0]
             self._last_accepted_req_id = req_id
             self._last_seen_req_id = req_id
-            _LOGGER.debug(
-                "%s: bootstrap event req_id=%s event=%#x — ignore sticky "
-                "press from before HA start; wait for newer req_id",
-                self.address,
-                req_id,
-                event_code,
-            )
+            if self.model is MerossModel.MS700:
+                _LOGGER.info(
+                    "%s: [ms700-btn] bootstrap req_id=%s event=%#x — "
+                    "sync only, do not fire (wait for newer req_id)",
+                    self.address,
+                    req_id,
+                    event_code,
+                )
+            else:
+                _LOGGER.debug(
+                    "%s: bootstrap event req_id=%s event=%#x — ignore sticky "
+                    "press from before HA start; wait for newer req_id",
+                    self.address,
+                    req_id,
+                    event_code,
+                )
             return []
 
         new_events: list[tuple[int, int]] = []
@@ -537,9 +546,11 @@ class MerossBLEDevice:
             if prev_seen is not None:
                 seen_gap = (req_id - prev_seen) & 0xFF
                 if 1 < seen_gap <= 128:
-                    _LOGGER.warning(
-                        "%s: BLE MISSED presses — req_id jumped %s → %s "
-                        "(gap=%s). Advertisement not delivered to HA.",
+                    # Firmware may advance req_id for local-only long-press UI
+                    # without HA needing those ads; gaps are not hard errors.
+                    _LOGGER.debug(
+                        "%s: BLE req_id jumped %s → %s (gap=%s); "
+                        "intermediate ads not seen (ok if local-only events)",
                         self.address,
                         prev_seen,
                         req_id,
@@ -548,25 +559,33 @@ class MerossBLEDevice:
             self._last_seen_req_id = req_id
 
             if self.model is MerossModel.MS700:
-                _LOGGER.debug(
-                    "%s: MS700 adv event raw req_id=%s event=%#x "
-                    "screen=%s button=%s logical=%s product_data=%s",
+                _LOGGER.info(
+                    "%s: [ms700-btn] seen req_id=%s event=%#x "
+                    "screen=%s button=%s logical=%s last_accepted=%s",
                     self.address,
                     req_id,
                     event_code,
                     screen_id,
                     button_id,
                     logical,
-                    adv.data.get("product_data"),
+                    self._last_accepted_req_id,
                 )
                 if logical is None:
-                    _LOGGER.warning(
-                        "%s: MS700 UNMAPPED event=%#x (screen=%s button=%s)",
+                    # Long-press / reserved-bit events are not HA button presses.
+                    # Do not advance last_accepted or they can block a later short
+                    # press that reuses or follows this req_id.
+                    _LOGGER.info(
+                        "%s: [ms700-btn] IGNORE unmapped/non-short-press "
+                        "event=%#x req_id=%s (screen=%s button=%s) — "
+                        "not a HA button; leave last_accepted=%s",
                         self.address,
                         event_code,
+                        req_id,
                         screen_id,
                         button_id,
+                        self._last_accepted_req_id,
                     )
+                    continue
 
             # Accept each report_reqId once. gap==0 → rebroadcast; gap>128 →
             # older stale packet after a newer id was already accepted.
@@ -575,25 +594,57 @@ class MerossBLEDevice:
                 if accept_gap == 0 or accept_gap > 128:
                     if accept_gap == 0 and self._stale_event_logged_for != req_id:
                         self._stale_event_logged_for = req_id
-                        _LOGGER.debug(
-                            "%s: sticky/rebroadcast req_id=%s event=%#x "
-                            "— ignoring until req_id advances",
+                        if self.model is MerossModel.MS700:
+                            _LOGGER.info(
+                                "%s: [ms700-btn] sticky/rebroadcast req_id=%s "
+                                "event=%#x logical=%s — ignore (same req_id; "
+                                "short press must use a new req_id)",
+                                self.address,
+                                req_id,
+                                event_code,
+                                logical,
+                            )
+                        else:
+                            _LOGGER.debug(
+                                "%s: sticky/rebroadcast req_id=%s event=%#x "
+                                "— ignoring until req_id advances",
+                                self.address,
+                                req_id,
+                                event_code,
+                            )
+                    elif (
+                        accept_gap > 128 and self.model is MerossModel.MS700
+                    ):
+                        _LOGGER.info(
+                            "%s: [ms700-btn] stale/older req_id=%s "
+                            "event=%#x last_accepted=%s gap=%s — ignore",
                             self.address,
                             req_id,
                             event_code,
+                            self._last_accepted_req_id,
+                            accept_gap,
                         )
                     continue
 
             self._last_accepted_req_id = req_id
             self._stale_event_logged_for = None
             new_events.append((req_id, event_code))
-            _LOGGER.debug(
-                "%s: ACCEPT event req_id=%s event=%#x logical=%s",
-                self.address,
-                req_id,
-                event_code,
-                logical,
-            )
+            if self.model is MerossModel.MS700:
+                _LOGGER.info(
+                    "%s: [ms700-btn] ACCEPT req_id=%s event=%#x logical=%s",
+                    self.address,
+                    req_id,
+                    event_code,
+                    logical,
+                )
+            else:
+                _LOGGER.debug(
+                    "%s: ACCEPT event req_id=%s event=%#x logical=%s",
+                    self.address,
+                    req_id,
+                    event_code,
+                    logical,
+                )
         return new_events
 
     def poll_needed(self, seconds_since_last_poll: float | None) -> bool:
