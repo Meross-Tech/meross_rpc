@@ -74,6 +74,8 @@ async def async_setup_entry(
                     # Registry entries survive restarts; platform entities do not.
                     # Always add missing platform entities even when registry
                     # already has the unique_id (e.g. screen1 after reload).
+                    # Do not touch registry name / disabled_by — those belong to
+                    # the user (HACS review). Default label lives on _attr_name.
                     if button_number not in added_buttons:
                         to_add.append(
                             MerossBLEMS700ButtonEventEntity(
@@ -81,12 +83,6 @@ async def async_setup_entry(
                             )
                         )
                         added_buttons.add(button_number)
-                    if entity_id is not None:
-                        registry.async_update_entity(
-                            entity_id,
-                            disabled_by=None,
-                            name=label,
-                        )
                 elif entity_id is not None:
                     registry.async_remove(entity_id)
                     added_buttons.discard(button_number)
