@@ -33,7 +33,7 @@
   "zeroconf": [
     {
       "type": "_http._tcp.local.",
-      "name": "refoss*"
+      "name": "meross*"
     }
   ]
 }
