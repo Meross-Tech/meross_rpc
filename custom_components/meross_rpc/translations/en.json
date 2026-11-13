@@ -24,6 +24,7 @@
         "title": "Meross",
         "description": "Select your Meross product model. The integration will use Wi-Fi or Bluetooth automatically.",
         "menu_options": {
+          "em01p": "EM01P (Wi-Fi)",
           "em06p": "EM06P (Wi-Fi)",
           "em16p": "EM16P (Wi-Fi)",
           "ms120": "MS120 (Bluetooth)",

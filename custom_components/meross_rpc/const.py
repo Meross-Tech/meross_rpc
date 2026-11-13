@@ -16,7 +16,7 @@ CONNECTION_WIFI: Final = "wifi"
 CONNECTION_BLUETOOTH: Final = "bluetooth"
 
 # User config-flow menu: model key → connection type (internal routing).
-WIFI_SETUP_MODELS: Final = ("em06p", "em16p")
+WIFI_SETUP_MODELS: Final = ("em01p", "em06p", "em16p")
 BLUETOOTH_SETUP_MODELS: Final = ("ms120", "ms220", "ms420", "ms700")
 USER_SETUP_MODELS: Final = (*WIFI_SETUP_MODELS, *BLUETOOTH_SETUP_MODELS)
 

@@ -189,6 +189,12 @@ class RefossConfigFlow(ConfigFlow, domain=DOMAIN):
             menu_options=list(USER_SETUP_MODELS),
         )
 
+    async def async_step_em01p(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """User selected Wi-Fi model EM01P."""
+        return await self._async_start_model_setup("em01p")
+
     async def async_step_em06p(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:

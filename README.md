@@ -53,7 +53,7 @@ Create `custom_components` if it does not exist.
 
 [![Start Config Flow](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=meross_rpc)
 
-### Wi-Fi devices (EM06P / EM16P)
+### Wi-Fi devices (EM01P / EM06P / EM16P)
 
 The device must already be on the same network as Home Assistant. Enter its hostname or IP address. If the device has a password, you will be asked for it.
 
@@ -65,6 +65,7 @@ Home Assistant needs a Bluetooth adapter or an [ESPHome Bluetooth proxy](https:/
 
 | Model | Connection | Notes |
 |-------|------------|--------|
+| EM01P | Wi-Fi | Smart meter reading head |
 | EM06P | Wi-Fi | Smart energy monitor |
 | EM16P | Wi-Fi | Smart energy monitor |
 | MS120 | Bluetooth | Temperature and humidity |
